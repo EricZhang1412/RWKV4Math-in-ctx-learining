@@ -1,0 +1,23 @@
+Looking in indexes: http://mirrors.aliyun.com/pypi/simple/
+Collecting rwkv-fla
+  Downloading http://mirrors.aliyun.com/pypi/packages/41/c5/b7349c432526378c4d5848a6ae67a4222ece04e56884ead5f52c32131387/rwkv_fla-0.7.202506171407-py3-none-any.whl (1.2 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.2/1.2 MB 178.6 kB/s eta 0:00:00
+Collecting deepspeed
+  Downloading http://mirrors.aliyun.com/pypi/packages/38/10/a7f63e086c1e1c12e290c98363c748ef5ddd6313fde739d2aeccd5ed0cd4/deepspeed-0.17.1.tar.gz (1.5 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.5/1.5 MB 348.4 kB/s eta 0:00:00
+  Preparing metadata (setup.py): started
+  Preparing metadata (setup.py): finished with status 'done'
+Collecting wandb
+  Downloading http://mirrors.aliyun.com/pypi/packages/88/c9/41b8bdb493e5eda32b502bc1cc49d539335a92cacaf0ef304d7dae0240aa/wandb-0.20.1-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (23.2 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 23.2/23.2 MB 2.0 MB/s eta 0:00:00
+Collecting ninja
+  Downloading http://mirrors.aliyun.com/pypi/packages/eb/7a/455d2877fe6cf99886849c7f9755d897df32eaf3a0fba47b56e615f880f7/ninja-1.11.1.4-py3-none-manylinux_2_12_x86_64.manylinux2010_x86_64.whl (422 kB)
+Collecting transformers (from rwkv-fla)
+  Downloading http://mirrors.aliyun.com/pypi/packages/96/f2/25b27b396af03d5b64e61976b14f7209e2939e9e806c10749b6d277c273e/transformers-4.52.4-py3-none-any.whl (10.5 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 10.5/10.5 MB 1.0 MB/s eta 0:00:00
+Collecting datasets (from rwkv-fla)
+  Downloading http://mirrors.aliyun.com/pypi/packages/20/34/a08b0ee99715eaba118cbe19a71f7b5e2425c2718ef96007c325944a1152/datasets-3.6.0-py3-none-any.whl (491 kB)
+Collecting einops (from rwkv-fla)
+  Downloading http://mirrors.aliyun.com/pypi/packages/87/62/9773de14fe6c45c23649e98b83231fffd7b9892b6cf863251dc2afa73643/einops-0.8.1-py3-none-any.whl (64 kB)
+Collecting hjson (from deepspeed)
+  Downloading http://mirrors.aliyun.com/pypi/packages/1f/7f/13cd798d180af4bf4c0ceddeefba2b864a63c71645abc0308b768d67bb81/hjson-3.1.0-py3-none-any.whl (54 kB)

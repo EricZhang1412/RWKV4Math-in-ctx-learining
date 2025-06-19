@@ -4,10 +4,24 @@ import torch
 
 
 def squared_error(ys_pred, ys):
+    # y_pred_logits = ys_pred[0]
+    # err = 0
+    # for i in range(len(y_pred_logits)):
+    #     err = err + (ys - y_pred_logits[i]).square()
+    # err = err / len(y_pred_logits)
+    # return err
     return (ys - ys_pred).square()
 
 
 def mean_squared_error(ys_pred, ys):
+    # y_pred_logits = ys_pred[0]
+    # err = 0
+    # for i in range(len(y_pred_logits)):
+    #     # print(f"y_pred_logits[{i}].shape: {y_pred_logits[i].shape}")
+    #     # print(f"ys.shape: {ys.shape}")
+    #     err = err + (ys - y_pred_logits[i]).square().mean()
+    # err = err / len(y_pred_logits)
+    # return err
     return (ys - ys_pred).square().mean()
 
 

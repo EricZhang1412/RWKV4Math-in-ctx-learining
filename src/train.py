@@ -81,9 +81,10 @@ def train(model, args):
             curriculum.n_dims_truncated,
             **data_sampler_args,
         )
+        # size: [64, 11, 5] -> [B, Points, dims]
+        # print(xs.shape) 
         task = task_sampler(**task_sampler_args)
         ys = task.evaluate(xs)
-
         loss_func = task.get_training_metric()
 
         loss, output = train_step(model, xs.cuda(), ys.cuda(), optimizer, loss_func)
@@ -100,19 +101,19 @@ def train(model, args):
             / curriculum.n_points
         )
 
-        if i % args.wandb.log_every_steps == 0 and not args.test_run:
-            wandb.log(
-                {
-                    "overall_loss": loss,
-                    "excess_loss": loss / baseline_loss,
-                    "pointwise/loss": dict(
-                        zip(point_wise_tags, point_wise_loss.cpu().numpy())
-                    ),
-                    "n_points": curriculum.n_points,
-                    "n_dims": curriculum.n_dims_truncated,
-                },
-                step=i,
-            )
+        # if i % args.wandb.log_every_steps == 0 and not args.test_run:
+        #     wandb.log(
+        #         {
+        #             "overall_loss": loss,
+        #             "excess_loss": loss / baseline_loss,
+        #             "pointwise/loss": dict(
+        #                 zip(point_wise_tags, point_wise_loss.cpu().numpy())
+        #             ),
+        #             "n_points": curriculum.n_points,
+        #             "n_dims": curriculum.n_dims_truncated,
+        #         },
+        #         step=i,
+        #     )
 
         curriculum.update()
 
@@ -140,18 +141,20 @@ def main(args):
         curriculum_args.points.start = curriculum_args.points.end
         curriculum_args.dims.start = curriculum_args.dims.end
         args.training.train_steps = 100
-    else:
-        wandb.init(
-            dir=args.out_dir,
-            project=args.wandb.project,
-            entity=args.wandb.entity,
-            config=args.__dict__,
-            notes=args.wandb.notes,
-            name=args.wandb.name,
-            resume=True,
-        )
+    # else:
+    #     # wandb.init(
+    #     #     dir=args.out_dir,
+    #     #     project=args.wandb.project,
+    #     #     entity=args.wandb.entity,
+    #     #     config=args.__dict__,
+    #     #     notes=args.wandb.notes,
+    #     #     name=args.wandb.name,
+    #     #     resume=True,
+    #     # )
 
     model = build_model(args.model)
+    ###### check the number of parameters
+    print(sum(p.numel() for p in model.parameters()))
     model.cuda()
     model.train()
 
