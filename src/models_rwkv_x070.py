@@ -16,6 +16,14 @@ from torch.nn import functional as F
 from torch.utils.cpp_extension import load
 from torch.utils.checkpoint import checkpoint
 
+from tqdm import tqdm
+from sklearn.svm import LinearSVC
+from sklearn.linear_model import LogisticRegression, Lasso
+import warnings
+from sklearn import tree
+import xgboost as xgb
+from base_models import NeuralNetwork, ParallelNetworks
+
 if importlib.util.find_spec("deepspeed"):
     import deepspeed
     from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
@@ -26,6 +34,57 @@ def __nop(ob):
 MyFunction = __nop
 if os.environ["RWKV_JIT_ON"] == "1":
     MyFunction = torch.compile
+
+def get_relevant_baselines(task_name):
+    task_to_baselines = {
+        "linear_regression": [
+            (LeastSquaresModel, {}),
+            (NNModel, {"n_neighbors": 3}),
+            (AveragingModel, {}),
+        ],
+        "linear_classification": [
+            (NNModel, {"n_neighbors": 3}),
+            (AveragingModel, {}),
+        ],
+        "sparse_linear_regression": [
+            (LeastSquaresModel, {}),
+            (NNModel, {"n_neighbors": 3}),
+            (AveragingModel, {}),
+        ]
+        + [(LassoModel, {"alpha": alpha}) for alpha in [1, 0.1, 0.01, 0.001, 0.0001]],
+        "relu_2nn_regression": [
+            (LeastSquaresModel, {}),
+            (NNModel, {"n_neighbors": 3}),
+            (AveragingModel, {}),
+            (
+                GDModel,
+                {
+                    "model_class": NeuralNetwork,
+                    "model_class_args": {
+                        "in_size": 20,
+                        "hidden_size": 100,
+                        "out_size": 1,
+                    },
+                    "opt_alg": "adam",
+                    "batch_size": 100,
+                    "lr": 5e-3,
+                    "num_steps": 100,
+                },
+            ),
+        ],
+        "decision_tree": [
+            (LeastSquaresModel, {}),
+            (NNModel, {"n_neighbors": 3}),
+            (DecisionTreeModel, {"max_depth": 4}),
+            (DecisionTreeModel, {"max_depth": None}),
+            (XGBoostModel, {}),
+            (AveragingModel, {}),
+        ],
+    }
+
+    models = [model_cls(**kwargs) for model_cls, kwargs in task_to_baselines[task_name]]
+    return models
+
 HEAD_SIZE = 64
 CHUNK_LEN = 256
 ############cuda kernels wkv7 for training############
@@ -318,21 +377,22 @@ class BlockGroup(nn.Module):
             output_x,
             output_v_first,
         ):
-        layer_x_states = ()
-        layer_v_first_states = ()
+        layer_x_states = []
+        layer_v_first_states = []
         for rwkv_layer in self.rwkv_layers:
-            x_states, v_first_states = rwkv_layer(x, v_first) # layer_output[0] is x, layer_output[1] is v_first
+            x_states, v_first_states = rwkv_layer(x, v_first)
 
             if output_x:
-                layer_x_states = layer_x_states + (x_states,)
+                layer_x_states.append(x_states)
             if output_v_first:
-                layer_v_first_states = layer_v_first_states + (v_first_states,)
-        outputs = (x_states, v_first_states)
-        # if output_x:
-        #     outputs = outputs + (layer_x_states,)
-        # if output_v_first:
-        #     outputs = outputs + (layer_v_first_states,)
-        return outputs
+                layer_v_first_states.append(v_first_states)
+
+        if output_x:
+            return x_states, v_first_states, layer_x_states
+        elif output_v_first:
+            return x_states, v_first_states, layer_v_first_states
+        else:
+            return x_states, v_first_states
 
 class L2Wrap(torch.autograd.Function):
     @staticmethod
@@ -353,9 +413,9 @@ class L2Wrap(torch.autograd.Function):
 @torch.jit.ignore
 def sample_repeat_layers(
         num_layers: int,
-        min_repeat: int = 1,
-        max_repeat: int = 12,
-        repeat_prob: float = 0.4,
+        min_repeat: int = 4,
+        max_repeat: int = 4,
+        repeat_prob: float = 1.0,
     ):
         """
         随机采样每一层是否要 repeat，以及重复多少次
@@ -386,6 +446,7 @@ class RWKV_shared(pl.LightningModule):
         assert args.dim_att % 32 == 0
         assert args.dim_ffn % 32 == 0
 
+        self.name = f"RWKV-shared_embd={args.n_embd}_group={args.num_hidden_groups}_layer_per_group={args.inner_group_num}_head={args.head_size}"
         #####################################################
         self.rand_step = getattr(args, 'rand_step', 0)
         self.mean_recurrence = getattr(args, 'mean_recurrence', 1)
@@ -413,106 +474,6 @@ class RWKV_shared(pl.LightningModule):
                 args.n_embd,
                 bias=True,
             )
-    
-    def configure_optimizers(self):
-        args = self.args
-
-        lr_decay = set()
-        lr_1x = set()
-        lr_2x = set()
-        for n, p in self.named_parameters():
-            if "att.w0" in n:
-                lr_2x.add(n)
-            elif (
-                (len(p.squeeze().shape) >= 2)
-                and (args.weight_decay > 0)
-                and (".weight" in n)
-            ):
-                lr_decay.add(n)
-            else:
-                lr_1x.add(n)
-
-        lr_decay = sorted(list(lr_decay))
-        lr_1x = sorted(list(lr_1x))
-        lr_2x = sorted(list(lr_2x))
-
-        if self.trainer.is_global_zero:
-            print("decay", lr_decay, "\n")
-            print("1x", lr_1x, "\n")
-            print("2x", lr_2x, "\n")
-
-        param_dict = {n: p for n, p in self.named_parameters()}
-
-        optim_groups = [
-            {
-                "params": [param_dict[n] for n in lr_1x],
-                "weight_decay": 0.0,
-                "my_lr_scale": 1.0,
-            },
-            {
-                "params": [param_dict[n] for n in lr_2x],
-                "weight_decay": 0.0,
-                "my_lr_scale": 2.0,
-            },
-        ]
-
-        if args.weight_decay > 0:
-            optim_groups += [
-                {
-                    "params": [param_dict[n] for n in lr_decay],
-                    "weight_decay": args.weight_decay,
-                    "my_lr_scale": 1.0,
-                }
-            ]
-            if self.deepspeed_offload:
-                return DeepSpeedCPUAdam(
-                    optim_groups,
-                    lr=self.args.lr_init,
-                    betas=self.args.betas,
-                    eps=self.args.adam_eps,
-                    bias_correction=True,
-                    adamw_mode=True,
-                    amsgrad=False,
-                )
-            return FusedAdam(
-                optim_groups,
-                lr=self.args.lr_init,
-                betas=self.args.betas,
-                eps=self.args.adam_eps,
-                bias_correction=True,
-                adam_w_mode=True,
-                amsgrad=False,
-            )
-        else:
-            if self.deepspeed_offload:
-                return DeepSpeedCPUAdam(
-                    optim_groups,
-                    lr=self.args.lr_init,
-                    betas=self.args.betas,
-                    eps=self.args.adam_eps,
-                    bias_correction=True,
-                    adamw_mode=False,
-                    weight_decay=0,
-                    amsgrad=False,
-                )
-            return FusedAdam(
-                optim_groups,
-                lr=self.args.lr_init,
-                betas=self.args.betas,
-                eps=self.args.adam_eps,
-                bias_correction=True,
-                adam_w_mode=False,
-                weight_decay=0,
-                amsgrad=False,
-            )
-
-    @property
-    def deepspeed_offload(self) -> bool:
-        strategy = self.trainer.strategy
-        if isinstance(strategy, DeepSpeedStrategy):
-            cfg = strategy.config["zero_optimization"]
-            return cfg.get("offload_optimizer") or cfg.get("offload_param")
-        return False
 
     @staticmethod
     def _combine(xs_b, ys_b):
@@ -535,14 +496,23 @@ class RWKV_shared(pl.LightningModule):
         ys,
         output_x=False,
         output_v_first=False,
+        inds=None,
     ):
         args = self.args
+        if inds is None:
+            inds = torch.arange(ys.shape[1])
+        else:
+            inds = torch.tensor(inds)
+            if max(inds) >= ys.shape[1] or min(inds) < 0:
+                raise ValueError("inds contain indices where xs and ys are not defined")
+                
         zs = self._combine(idx, ys)
 
+        # zs shape should be [Batch_size, 2 * points, dim]
         B, T, _ = zs.size()
 
-        all_x_states = ()
-        all_v_first_states = ()
+        all_x_states = []
+        all_v_first_states = []
         all_logits = []
 
         x = self.emb(zs)
@@ -556,9 +526,7 @@ class RWKV_shared(pl.LightningModule):
         assert num_hidden_groups == settings_num_hidden_groups, "The number of hidden groups does not match the settings."
         assert num_inner_layers == settings_num_inner_layers, "The number of inner layers does not match the settings."
 
-        repeat_layers = {
-            
-        }
+        repeat_layers = {} # no looping
         # repeat_layers = sample_repeat_layers(num_layers=len(self.rwkv_layer_groups))
         total_steps = len(self.rwkv_layer_groups)  # 假设你用了所有 group
 
@@ -566,34 +534,31 @@ class RWKV_shared(pl.LightningModule):
             repeat_count = repeat_layers.get(i, 1)  # 默认为1次
 
             for _ in range(repeat_count):
-                outputs = self.rwkv_layer_groups[i](
+                x_states, v_first_states = self.rwkv_layer_groups[i](
                     x, v_first,
                     output_x=output_x,
                     output_v_first=output_v_first
                 )
-                x_states, v_first_states = outputs[0], outputs[1]
 
                 if output_x:
-                    all_x_states += (x_states,)
+                    all_x_states.append(x_states)
                 if output_v_first:
-                    all_v_first_states += (v_first_states,)
+                    all_v_first_states.append(v_first_states)
 
-            #     if self.injection_type == "add":
-            #         x = x + x_states
-            #         v_first = v_first + v_first_states
-            #     elif self.injection_type in ["linear", "ffn"]:
-            #         # x = self.input_injection_adapter(torch.cat([x, x_states], dim=-1))
-            #         x = self.input_injection_adapter_x(torch.cat([
-            #                 F.layer_norm(x, x.shape[-1:]),
-            #                 F.layer_norm(x_states, x_states.shape[-1:])
-            #             ], dim=-1))
-            #         # v_first = self.input_injection_adapter(torch.cat([v_first, v_first_states], dim=-1))
-            #         v_first = self.input_injection_adapter_v(torch.cat([
-            #                 F.layer_norm(v_first, v_first.shape[-1:]),
-            #                 F.layer_norm(v_first_states, v_first_states.shape[-1:])
-            #             ], dim=-1))
-            #     else:
-            #         raise NotImplementedError(f"Unknown injection type: {self.injection_type}")
+                if self.injection_type == "add":
+                    x = x + x_states
+                    v_first = v_first + v_first_states
+                elif self.injection_type in ["linear", "ffn"]:
+                    # x = self.input_injection_adapter_x(torch.cat([x, x_states], dim=-1))
+                    x = self.input_injection_adapter_x(torch.cat([
+                            F.layer_norm(x, x.shape[-1:]),
+                            F.layer_norm(x_states, x_states.shape[-1:])
+                        ], dim=-1))
+                    # v_first = self.input_injection_adapter_v(torch.cat([v_first, v_first_states], dim=-1))
+                    v_first = self.input_injection_adapter_v(torch.cat([
+                            F.layer_norm(v_first, v_first.shape[-1:]),
+                            F.layer_norm(v_first_states, v_first_states.shape[-1:])
+                        ], dim=-1))
 
             # logits = self.head(self.ln_out(x))
 
@@ -718,3 +683,350 @@ class RWKV_shared(pl.LightningModule):
         gc.collect()
         torch.cuda.empty_cache()
         return m
+
+class NNModel:
+    def __init__(self, n_neighbors, weights="uniform"):
+        # should we be picking k optimally
+        self.n_neighbors = n_neighbors
+        self.weights = weights
+        self.name = f"NN_n={n_neighbors}_{weights}"
+
+    def __call__(self, xs, ys, inds=None):
+        if inds is None:
+            inds = range(ys.shape[1])
+        else:
+            if max(inds) >= ys.shape[1] or min(inds) < 0:
+                raise ValueError("inds contain indices where xs and ys are not defined")
+
+        preds = []
+
+        for i in inds:
+            if i == 0:
+                preds.append(torch.zeros_like(ys[:, 0]))  # predict zero for first point
+                continue
+            train_xs, train_ys = xs[:, :i], ys[:, :i]
+            test_x = xs[:, i : i + 1]
+            dist = (train_xs - test_x).square().sum(dim=2).sqrt()
+
+            if self.weights == "uniform":
+                weights = torch.ones_like(dist)
+            else:
+                weights = 1.0 / dist
+                inf_mask = torch.isinf(weights).float()  # deal with exact match
+                inf_row = torch.any(inf_mask, axis=1)
+                weights[inf_row] = inf_mask[inf_row]
+
+            pred = []
+            k = min(i, self.n_neighbors)
+            ranks = dist.argsort()[:, :k]
+            for y, w, n in zip(train_ys, weights, ranks):
+                y, w = y[n], w[n]
+                pred.append((w * y).sum() / w.sum())
+            preds.append(torch.stack(pred))
+
+        return torch.stack(preds, dim=1)
+
+class LeastSquaresModel:
+    def __init__(self, driver=None):
+        self.driver = driver
+        self.name = f"OLS_driver={driver}"
+
+    def __call__(self, xs, ys, inds=None):
+        xs, ys = xs.cpu(), ys.cpu()
+        if inds is None:
+            inds = range(ys.shape[1])
+        else:
+            if max(inds) >= ys.shape[1] or min(inds) < 0:
+                raise ValueError("inds contain indices where xs and ys are not defined")
+
+        preds = []
+
+        for i in inds:
+            if i == 0:
+                preds.append(torch.zeros_like(ys[:, 0]))  # predict zero for first point
+                continue
+            train_xs, train_ys = xs[:, :i], ys[:, :i]
+            test_x = xs[:, i : i + 1]
+
+            ws, _, _, _ = torch.linalg.lstsq(
+                train_xs, train_ys.unsqueeze(2), driver=self.driver
+            )
+
+            pred = test_x @ ws
+            preds.append(pred[:, 0, 0])
+
+        return torch.stack(preds, dim=1)
+
+
+class AveragingModel:
+    def __init__(self):
+        self.name = "averaging"
+
+    def __call__(self, xs, ys, inds=None):
+        if inds is None:
+            inds = range(ys.shape[1])
+        else:
+            if max(inds) >= ys.shape[1] or min(inds) < 0:
+                raise ValueError("inds contain indices where xs and ys are not defined")
+
+        preds = []
+
+        for i in inds:
+            if i == 0:
+                preds.append(torch.zeros_like(ys[:, 0]))  # predict zero for first point
+                continue
+            train_xs, train_ys = xs[:, :i], ys[:, :i]
+            test_x = xs[:, i : i + 1]
+
+            train_zs = train_xs * train_ys.unsqueeze(dim=-1)
+            w_p = train_zs.mean(dim=1).unsqueeze(dim=-1)
+            pred = test_x @ w_p
+            preds.append(pred[:, 0, 0])
+
+        return torch.stack(preds, dim=1)
+
+
+# Lasso regression (for sparse linear regression).
+# Seems to take more time as we decrease alpha.
+class LassoModel:
+    def __init__(self, alpha, max_iter=100000):
+        # the l1 regularizer gets multiplied by alpha.
+        self.alpha = alpha
+        self.max_iter = max_iter
+        self.name = f"lasso_alpha={alpha}_max_iter={max_iter}"
+
+    # inds is a list containing indices where we want the prediction.
+    # prediction made at all indices by default.
+    def __call__(self, xs, ys, inds=None):
+        xs, ys = xs.cpu(), ys.cpu()
+
+        if inds is None:
+            inds = range(ys.shape[1])
+        else:
+            if max(inds) >= ys.shape[1] or min(inds) < 0:
+                raise ValueError("inds contain indices where xs and ys are not defined")
+
+        preds = []  # predict one for first point
+
+        # i: loop over num_points
+        # j: loop over bsize
+        for i in inds:
+            pred = torch.zeros_like(ys[:, 0])
+
+            if i > 0:
+                pred = torch.zeros_like(ys[:, 0])
+                for j in range(ys.shape[0]):
+                    train_xs, train_ys = xs[j, :i], ys[j, :i]
+
+                    # If all points till now have the same label, predict that label.
+
+                    clf = Lasso(
+                        alpha=self.alpha, fit_intercept=False, max_iter=self.max_iter
+                    )
+
+                    # Check for convergence.
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings("error")
+                        try:
+                            clf.fit(train_xs, train_ys)
+                        except Warning:
+                            print(f"lasso convergence warning at i={i}, j={j}.")
+                            raise
+
+                    w_pred = torch.from_numpy(clf.coef_).unsqueeze(1)
+
+                    test_x = xs[j, i : i + 1]
+                    y_pred = (test_x @ w_pred.float()).squeeze(1)
+                    pred[j] = y_pred[0]
+
+            preds.append(pred)
+
+        return torch.stack(preds, dim=1)
+
+
+# Gradient Descent and variants.
+# Example usage: gd_model = GDModel(NeuralNetwork, {'in_size': 50, 'hidden_size':400, 'out_size' :1}, opt_alg = 'adam', batch_size = 100, lr = 5e-3, num_steps = 200)
+class GDModel:
+    def __init__(
+        self,
+        model_class,
+        model_class_args,
+        opt_alg="sgd",
+        batch_size=1,
+        num_steps=1000,
+        lr=1e-3,
+        loss_name="squared",
+    ):
+        # model_class: torch.nn model class
+        # model_class_args: a dict containing arguments for model_class
+        # opt_alg can be 'sgd' or 'adam'
+        # verbose: whether to print the progress or not
+        # batch_size: batch size for sgd
+        self.model_class = model_class
+        self.model_class_args = model_class_args
+        self.opt_alg = opt_alg
+        self.lr = lr
+        self.batch_size = batch_size
+        self.num_steps = num_steps
+        self.loss_name = loss_name
+
+        self.name = f"gd_model_class={model_class}_model_class_args={model_class_args}_opt_alg={opt_alg}_lr={lr}_batch_size={batch_size}_num_steps={num_steps}_loss_name={loss_name}"
+
+    def __call__(self, xs, ys, inds=None, verbose=False, print_step=100):
+        # inds is a list containing indices where we want the prediction.
+        # prediction made at all indices by default.
+        # xs: bsize X npoints X ndim.
+        # ys: bsize X npoints.
+        xs, ys = xs.cuda(), ys.cuda()
+
+        if inds is None:
+            inds = range(ys.shape[1])
+        else:
+            if max(inds) >= ys.shape[1] or min(inds) < 0:
+                raise ValueError("inds contain indices where xs and ys are not defined")
+
+        preds = []  # predict one for first point
+
+        # i: loop over num_points
+        for i in tqdm(inds):
+            pred = torch.zeros_like(ys[:, 0])
+            model = ParallelNetworks(
+                ys.shape[0], self.model_class, **self.model_class_args
+            )
+            model.cuda()
+            if i > 0:
+                pred = torch.zeros_like(ys[:, 0])
+
+                train_xs, train_ys = xs[:, :i], ys[:, :i]
+                test_xs, test_ys = xs[:, i : i + 1], ys[:, i : i + 1]
+
+                if self.opt_alg == "sgd":
+                    optimizer = torch.optim.SGD(model.parameters(), lr=self.lr)
+                elif self.opt_alg == "adam":
+                    optimizer = torch.optim.Adam(model.parameters(), lr=self.lr)
+                else:
+                    raise NotImplementedError(f"{self.opt_alg} not implemented.")
+
+                if self.loss_name == "squared":
+                    loss_criterion = nn.MSELoss()
+                else:
+                    raise NotImplementedError(f"{self.loss_name} not implemented.")
+
+                # Training loop
+                for j in range(self.num_steps):
+
+                    # Prepare batch
+                    mask = torch.zeros(i).bool()
+                    perm = torch.randperm(i)
+                    mask[perm[: self.batch_size]] = True
+                    train_xs_cur, train_ys_cur = train_xs[:, mask, :], train_ys[:, mask]
+
+                    if verbose and j % print_step == 0:
+                        model.eval()
+                        with torch.no_grad():
+                            outputs = model(train_xs_cur)
+                            loss = loss_criterion(
+                                outputs[:, :, 0], train_ys_cur
+                            ).detach()
+                            outputs_test = model(test_xs)
+                            test_loss = loss_criterion(
+                                outputs_test[:, :, 0], test_ys
+                            ).detach()
+                            print(
+                                f"ind:{i},step:{j}, train_loss:{loss.item()}, test_loss:{test_loss.item()}"
+                            )
+
+                    optimizer.zero_grad()
+
+                    model.train()
+                    outputs = model(train_xs_cur)
+                    loss = loss_criterion(outputs[:, :, 0], train_ys_cur)
+                    loss.backward()
+                    optimizer.step()
+
+                model.eval()
+                pred = model(test_xs).detach()
+
+                assert pred.shape[1] == 1 and pred.shape[2] == 1
+                pred = pred[:, 0, 0]
+
+            preds.append(pred)
+
+        return torch.stack(preds, dim=1)
+
+
+class DecisionTreeModel:
+    def __init__(self, max_depth=None):
+        self.max_depth = max_depth
+        self.name = f"decision_tree_max_depth={max_depth}"
+
+    # inds is a list containing indices where we want the prediction.
+    # prediction made at all indices by default.
+    def __call__(self, xs, ys, inds=None):
+        xs, ys = xs.cpu(), ys.cpu()
+
+        if inds is None:
+            inds = range(ys.shape[1])
+        else:
+            if max(inds) >= ys.shape[1] or min(inds) < 0:
+                raise ValueError("inds contain indices where xs and ys are not defined")
+
+        preds = []
+
+        # i: loop over num_points
+        # j: loop over bsize
+        for i in inds:
+            pred = torch.zeros_like(ys[:, 0])
+
+            if i > 0:
+                pred = torch.zeros_like(ys[:, 0])
+                for j in range(ys.shape[0]):
+                    train_xs, train_ys = xs[j, :i], ys[j, :i]
+
+                    clf = tree.DecisionTreeRegressor(max_depth=self.max_depth)
+                    clf = clf.fit(train_xs, train_ys)
+                    test_x = xs[j, i : i + 1]
+                    y_pred = clf.predict(test_x)
+                    pred[j] = y_pred[0]
+
+            preds.append(pred)
+
+        return torch.stack(preds, dim=1)
+
+
+class XGBoostModel:
+    def __init__(self):
+        self.name = "xgboost"
+
+    # inds is a list containing indices where we want the prediction.
+    # prediction made at all indices by default.
+    def __call__(self, xs, ys, inds=None):
+        xs, ys = xs.cpu(), ys.cpu()
+
+        if inds is None:
+            inds = range(ys.shape[1])
+        else:
+            if max(inds) >= ys.shape[1] or min(inds) < 0:
+                raise ValueError("inds contain indices where xs and ys are not defined")
+
+        preds = []
+
+        # i: loop over num_points
+        # j: loop over bsize
+        for i in tqdm(inds):
+            pred = torch.zeros_like(ys[:, 0])
+            if i > 0:
+                pred = torch.zeros_like(ys[:, 0])
+                for j in range(ys.shape[0]):
+                    train_xs, train_ys = xs[j, :i], ys[j, :i]
+
+                    clf = xgb.XGBRegressor()
+
+                    clf = clf.fit(train_xs, train_ys)
+                    test_x = xs[j, i : i + 1]
+                    y_pred = clf.predict(test_x)
+                    pred[j] = y_pred[0].item()
+
+            preds.append(pred)
+
+        return torch.stack(preds, dim=1)

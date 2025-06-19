@@ -8,5 +8,5 @@ CUDA_VISIBLE_DEVICES=4 python train_rwkv.py \
     --load_model "0" \
     --train_stage 2 \
     --accelerator gpu \
-    --batch_size 64 \
+    --batch_size 256 \
     # --ds_bucket_mb $DS_BUCKET_MB

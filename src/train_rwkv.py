@@ -23,6 +23,8 @@ from samplers import get_data_sampler
 from tasks import get_task_sampler
 from curriculum_rwkv import Curriculum
 
+from eval_rwkv import get_run_metrics
+
 def sample_seeds(total_seeds, count):
     seeds = set()
     while len(seeds) < count:
@@ -99,6 +101,13 @@ def train(model, args):
         )
         curriculum.update()
         pbar.set_description(f"loss {loss}")
+        if i % args.save_every_steps == 0 and not args.test_run:
+            training_state = {
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "train_step": i,
+            }
+            torch.save(training_state, state_path)
 
 def main():
     parser = ArgumentParser()
@@ -108,14 +117,14 @@ def main():
     parser.add_argument("--load_partial", default=0, type=int)
     parser.add_argument("--ds_bucket_mb", default=200, type=int)
     ######## args for model architecture
-    parser.add_argument("--n_embd", default=512, type=int)
+    parser.add_argument("--n_embd", default=64, type=int)
     parser.add_argument("--dim_att", default=0, type=int)
     parser.add_argument("--dim_ffn", default=0, type=int)
-    parser.add_argument("--head_size", default=64, type=int)
+    parser.add_argument("--head_size", default=2, type=int)
     parser.add_argument("--vocab_size", default=5, type=int) #### raw data dimensions ()
-    parser.add_argument("--num_hidden_groups", default=2, type=int)
-    parser.add_argument("--inner_group_num", default=2, type=int)
-    parser.add_argument("--injection_type", default="linear", type=str)
+    parser.add_argument("--num_hidden_groups", default=3, type=int)
+    parser.add_argument("--inner_group_num", default=1, type=int)
+    parser.add_argument("--injection_type", default=None, type=str)
     # gradient checkpt: saves VRAM, but slower
     parser.add_argument("--grad_cp", default=0, type=int)
 
@@ -147,8 +156,10 @@ def main():
     parser.add_argument("--training_data", default="gaussian", type=str)
     parser.add_argument("--task_name", default="linear_regression", type=str)
     parser.add_argument("--training_num_tasks", default=1, type=int)
-    parser.add_argument("--train_steps", default=500001, type=int)
+    parser.add_argument("--train_steps", default=5001, type=int)
     parser.add_argument("--num_training_examples", default=None, type=int)
+    parser.add_argument("--save_every_steps", default=1000, type=int)
+    parser.add_argument("--test_run", default=False, type=bool)
 
     parser.add_argument("--dims_start", default=5, type=int)
     parser.add_argument("--points_start", default=256, type=int)
@@ -278,6 +289,8 @@ def main():
     model.cuda()
     model.train()
     train(model, args)
+
+    _ = get_run_metrics(args.proj_dir, args)  # precompute metrics for eval
     
 if __name__ == "__main__":
     main()
