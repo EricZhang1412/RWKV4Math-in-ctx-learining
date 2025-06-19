@@ -35,12 +35,6 @@ def train_step(model, xs, ys, optimizer, loss_func):
     loss = loss_func(output, ys)
     loss.backward()
     optimizer.step()
-
-    # output_Detach = []
-    # for out in output[0]:
-    #     output_detach = out.detach()
-    #     output_Detach.append(output_detach)
-    # return loss.detach().item(), output_Detach
     return loss.detach().item(), output.detach()
 
 def train(model, args):
@@ -80,10 +74,6 @@ def train(model, args):
             seeds = sample_seeds(num_training_examples, bsize)
             data_sampler_args["seeds"] = seeds
             task_sampler_args["seeds"] = [s + 1 for s in seeds]
-
-        # print(f"curriculum.n_points: {curriculum.n_points}")
-        # print(f"curriculum.n_dims_truncated: {curriculum.n_dims_truncated}")
-        # print(f"bsize: {bsize}")
         
         xs = data_sampler.sample_xs(
             curriculum.n_points,
@@ -242,14 +232,8 @@ def main():
         torch.backends.cudnn.allow_tf32 = True
         torch.backends.cuda.matmul.allow_tf32 = True
     os.environ["RWKV_FLOAT_MODE"] = args.precision
-    ################# Setup Trainer for Pytorch Lightning #################
-    # trainer = Trainer.from_argparse_args(
-    #     args,
-    #     callbacks=[train_callback(args)],
-    # )
-    ################# Create RWKV v7 Model with Parameter sharing for training #################
+
     model = RWKV_shared(args)
-    # print(model)
     model.float()
     ################# Stage One: Initialization ################# 
     ################# Remember set --load_model to Null (--load_model "") #################
@@ -290,11 +274,6 @@ def main():
         s2 = str(shape[2]) if len(shape) > 2 else ""
         s3 = str(shape[3]) if len(shape) > 3 else ""
         print(f"{s0.ljust(5)} {s1.ljust(5)} {s2.ljust(5)} {s3.ljust(5)} {n}")
-
-    # if "deepspeed" in args.strategy:
-    #     trainer.strategy.config["zero_optimization"]["allgather_bucket_size"] = args.ds_bucket_mb * 1000 * 1000
-    #     trainer.strategy.config["zero_optimization"]["reduce_bucket_size"] = args.ds_bucket_mb * 1000 * 1000
-
     
     model.cuda()
     model.train()

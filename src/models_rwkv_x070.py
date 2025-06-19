@@ -1,15 +1,3 @@
-# import torch
-# import torch.nn as nn
-# from transformers import GPT2Model, GPT2Config
-# from tqdm import tqdm
-# from sklearn.svm import LinearSVC
-# from sklearn.linear_model import LogisticRegression, Lasso
-# import warnings
-# from sklearn import tree
-# import xgboost as xgb
-
-# from base_models import NeuralNetwork, ParallelNetworks
-
 import gc
 import importlib
 import math
@@ -553,12 +541,6 @@ class RWKV_shared(pl.LightningModule):
 
         B, T, _ = zs.size()
 
-        # if torch.any(idx < 0) or torch.any(idx >= self.args.vocab_size):
-        #     print(f"[Error] idx out of bounds in forward(): min={idx.min().item()}, max={idx.max().item()}, vocab_size={self.args.vocab_size}")
-        #     raise ValueError("Input token index out of bounds.")
-
-        # assert T <= args.ctx_len, "Cannot forward, model ctx_len is exhausted."
-
         all_x_states = ()
         all_v_first_states = ()
         all_logits = []
@@ -623,64 +605,9 @@ class RWKV_shared(pl.LightningModule):
         x = x[:, ::2, 0]
         # all_logits.append(x)
 
-        ######### get all loop times from "repeat_layers"
         total_repeat_times = sum(repeat_layers.values())
-        # mean_repeat_times = total_repeat_times / len(self.rwkv_layer_groups)
-        # return all_logits, total_repeat_times
+        
         return x
-    
-    # def training_step(self, batch, batch_idx):
-    #     idx, targets = batch
-    #     # logits, total_repeat_times = self(idx)
-    #     logits_list, total_repeat_times = self(idx)
-    #     # print(f"total_repeat_times: {total_repeat_times}")
-    #     # print(f"logits_list length: {len(logits_list)}")
-    #     elbayad_exponent = getattr(self.args, "elbayad_exponent", 1.6)
-    #     weights = torch.arange(1, len(logits_list)+1, device=logits_list[0].device, dtype=torch.float32)
-    #     weights = weights ** elbayad_exponent
-    #     weights = weights / weights.sum()
-
-    #     total_loss = 0
-    #     for i, logits in enumerate(logits_list):
-    #         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
-    #         # loss = loss / total_repeat_times
-    #         total_loss += weights[i] * loss
-
-    #     self.log('train_loss', total_loss, prog_bar=True, on_step=True, on_epoch=True)
-
-    #     return L2Wrap.apply(total_loss, logits_list[-1])
-
-    #     # loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
-    #     # return L2Wrap.apply(loss, logits)
-
-    # # def training_step_end(self, batch_parts):
-    # #     all = self.all_gather(batch_parts)
-    # #     if self.trainer.is_global_zero:
-    # #         self.trainer.my_loss_all = all
-    # def training_step_end(self, batch_parts):
-    #     try:
-    #         # 确保batch_parts是tensor
-    #         if not isinstance(batch_parts, torch.Tensor):
-    #             print(f"Warning: batch_parts is not a tensor: {type(batch_parts)}")
-    #             return batch_parts
-
-    #         # 检查tensor是否有效
-    #         if torch.isnan(batch_parts).any() or torch.isinf(batch_parts).any():
-    #             print("Warning: batch_parts contains NaN or Inf values")
-    #             return batch_parts
-
-    #         # 进行all_gather
-    #         all = self.all_gather(batch_parts)
-
-    #         if self.trainer.is_global_zero:
-    #             self.trainer.my_loss_all = all
-
-    #         return batch_parts
-
-    #     except Exception as e:
-    #         print(f"Error in training_step_end: {e}")
-    #         # 返回原始数据，继续训练
-    #         return batch_parts
 
     def generate_init_weight(self):
         print(

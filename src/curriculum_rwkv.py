@@ -8,11 +8,6 @@ class Curriculum:
         # this change is done every interval,
         # and start/end are the limits of the parameter
 
-        # self.n_dims_truncated = args.dims.start
-        # self.n_points = args.points.start
-        # self.n_dims_schedule = args.dims
-        # self.n_points_schedule = args.points
-
         ##### n_dims_schedule contains four attributes: start, end, inc, interval
         self.n_dims_truncated = args.dims_start # for rwkv
         self.n_points = args.points_start # for rwkv
@@ -29,19 +24,12 @@ class Curriculum:
     def update(self):
         self.step_count += 1
         self.n_dims_truncated = self.update_var(
-            # self.n_dims_truncated, self.n_dims_schedule
             self.n_dims_truncated, self.dim_interval, self.dim_inc, self.dim_end
         )
 
         self.n_points = self.update_var(
-            # self.n_points, self.n_points_schedule
             self.n_points, self.points_interval, self.points_inc, self.points_end
         )
-
-    # def update_var(self, var, schedule):
-    #     if self.step_count % schedule.interval == 0:
-    #         var += schedule.inc
-    #     return min(var, schedule.end)
 
     def update_var(self, var, interval, inc, end):
         if self.step_count % interval == 0:
