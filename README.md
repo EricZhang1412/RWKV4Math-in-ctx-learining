@@ -16,7 +16,7 @@ Paper: http://arxiv.org/abs/2208.01066 <br><br>
     booktitle={arXiv preprint}
 }
 ```
-# 🎉[2025-6-6] Update:
+# 🎉[2025-6-19] Update:
 - 🚩Implementation of RWKV-v7 training on simple function classes regression task:
   
   Model defined in [`src/models_rwkv_x070.py`](https://github.com/EricZhang1412/RWKV4Math-in-ctx-learining/blob/main/src/models_rwkv_x070.py) and training script in `src/train_rwkv.py`.
