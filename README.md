@@ -16,7 +16,20 @@ Paper: http://arxiv.org/abs/2208.01066 <br><br>
     booktitle={arXiv preprint}
 }
 ```
+# 🎉[2025-6-6] Update:
+- 🚩Implementation of RWKV-v7 training on simple function classes regression task:
+  
+  Model defined in [`src/models_rwkv_x070.py`](https://github.com/EricZhang1412/RWKV4Math-in-ctx-learining/blob/main/src/models_rwkv_x070.py) and training script in `src/train_rwkv.py`.
+  > ⚠️This project is not based on Pytorch-lightning.
+  >
+  > ⚠️The core kernel cannot be supported by rwkv-fla based on Triton(e.g.`token_shift`, `fused_addcmul_rwkv7`, `fused_k_rwkv7`). So far, I have not found out why...
+  
 
+The instructions of the new hyperparameters are coming soon...
+
+## 📝TODO
+- [ ] Add training results and comparisons with other models. (wandb)
+- [ ] Implementation of the RWKV-Deoth-recurrent model. (So HARRRRRD!!!!!!)
 ## Getting started
 ### Transformers (GPT-2)
 You can start by cloning our repository and following the steps below.
@@ -49,7 +62,3 @@ are as follows (starting from `src`):
     sh init_train_rwkv.sh # (stage 1, initialize the model)
     sh train_rwkv.sh # (stage 2, train the model)
     ```
-
-# Maintainers
-* [Shivam Garg](https://cs.stanford.edu/~shivamg/)
-* [Dimitris Tsipras](https://dtsipras.com/)
