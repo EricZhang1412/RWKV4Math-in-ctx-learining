@@ -70,7 +70,9 @@ In total, we have implemented several baselines focusing on different sets of pr
   - LeastSquaresModel
   - K-NN ($k = 3$)
   - AveragingModel
+For linear regression, we use squared error as the evaluation metric.
 
 ### Evaluation
 #### Function call graph
 ![Function call graph](src/callgraph.png)
+
