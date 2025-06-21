@@ -112,7 +112,7 @@ def train(model, args):
 def main():
     parser = ArgumentParser()
     # parser.add_argument("--strategy", default="", type=str) ### already in pl.Trainer parser
-    parser.add_argument("--proj_dir", default="out", type=str)
+    parser.add_argument("--proj_dir", default="out-2", type=str)
     parser.add_argument("--load_model", default="", type=str)
     parser.add_argument("--load_partial", default=0, type=int)
     parser.add_argument("--ds_bucket_mb", default=200, type=int)
@@ -162,9 +162,9 @@ def main():
     parser.add_argument("--test_run", default=False, type=bool)
 
     parser.add_argument("--dims_start", default=5, type=int)
-    parser.add_argument("--points_start", default=256, type=int)
+    parser.add_argument("--points_start", default=11, type=int)
     parser.add_argument("--dims_end", default=5, type=int)
-    parser.add_argument("--points_end", default=256, type=int)
+    parser.add_argument("--points_end", default=11, type=int)
     parser.add_argument("--dims_inc", default=1, type=int)
     parser.add_argument("--points_inc", default=2, type=int)
     parser.add_argument("--dims_interval", default=2000, type=int)

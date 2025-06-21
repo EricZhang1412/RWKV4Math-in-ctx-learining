@@ -151,6 +151,224 @@ def RUN_CUDA_RWKV7g(q, w, k, v, a, b):
     q, w, k, v, a, b = [i.view(B, T, HC // 64, 64) for i in [q, w, k, v, a, b]]
     return WindBackstepping.apply(w, q, k, v, a, b).view(B, T, HC)
 
+from torch.autograd import Function
+class WindBacksteppingFunction_Torch(Function):
+    @staticmethod
+    def forward(ctx, w, q, k, v, z, a):
+        """
+        前向传播函数
+        
+        参数:
+        - w: 权重矩阵 [B, T, H, C]
+        - q: 查询矩阵 [B, T, H, C]
+        - k: 键矩阵 [B, T, H, C]
+        - v: 值矩阵 [B, T, H, C]
+        - z: z矩阵 [B, T, H, C]
+        - a: a矩阵 [B, T, H, C]
+        
+        返回:
+        - y: 输出矩阵 [B, T, H, C]
+        """
+        B, T, H, C = w.shape
+        device = w.device
+        
+        # 转换为连续存储以提高效率
+        w = w.contiguous()
+        q = q.contiguous()
+        k = k.contiguous()
+        v = v.contiguous()
+        z = z.contiguous()
+        a = a.contiguous()
+        
+        # 预处理w: w = exp(-exp(w))
+        w = torch.exp(-torch.exp(w))
+        
+        # 初始化输出和状态
+        y = torch.zeros_like(q)
+        states = torch.zeros(B, H, C, C, device=device)
+        sa_values = torch.zeros_like(q)
+        
+        # 计算每个时间步骤
+        for t in range(T):
+            # 获取当前时间步骤的数据切片
+            q_t = q[:, t]  # [B, H, C]
+            w_t = w[:, t]  # [B, H, C]
+            k_t = k[:, t]  # [B, H, C]
+            v_t = v[:, t]  # [B, H, C]
+            z_t = z[:, t]  # [B, H, C]
+            a_t = a[:, t]  # [B, H, C]
+            
+            # 计算sa: sa[b,h,i] = sum_j a[b,h,j] * state[b,h,j,i]
+            # [B, H, C] = sum_j [B, H, C, j] * [B, H, j, C]
+            sa = torch.zeros_like(q_t)
+            for b in range(B):
+                for h in range(H):
+                    # [C] = sum_j [C] * [C, j]
+                    sa[b, h] = torch.sum(z_t[b, h].unsqueeze(1) * states[b, h], dim=1)
+            
+            sa_values[:, t] = sa
+            
+            # 更新状态: state = state * w + sa * a + k * v
+            for b in range(B):
+                for h in range(H):
+                    # [C, C] = [C, C] * [C].unsqueeze(1) + [C].unsqueeze(1) * [C].unsqueeze(0) + [C].unsqueeze(1) * [C].unsqueeze(0)
+                    states[b, h] = states[b, h] * w_t[b, h].unsqueeze(1) + \
+                                  sa[b, h].unsqueeze(1) * a_t[b, h].unsqueeze(0) + \
+                                  k_t[b, h].unsqueeze(1) * v_t[b, h].unsqueeze(0)
+            
+            # 计算输出: y = sum_j state[j] * q[j]
+            for b in range(B):
+                for h in range(H):
+                    # [C] = sum_j [C, j] * [j]
+                    y[b, t, h] = torch.sum(states[b, h] * q_t[b, h], dim=1)
+        
+        # 保存上下文
+        chunk_len = 1  # 在PyTorch实现中，不需要特定的chunk_len约束
+        num_chunks = (T + chunk_len - 1) // chunk_len
+        saved_states = torch.zeros(B, H, num_chunks, C, C, device=device)
+        
+        for t in range(T):
+            if (t + 1) % chunk_len == 0:
+                chunk_idx = t // chunk_len
+                saved_states[:, :, chunk_idx] = states
+        
+        ctx.save_for_backward(w, q, k, v, z, a, saved_states, sa_values)
+        ctx.chunk_len = chunk_len
+        
+        return y
+    @staticmethod
+    def backward(ctx, dy):
+        """
+        反向传播函数
+        
+        参数:
+        - dy: 输出梯度 [B, T, H, C]
+        
+        返回:
+        - dw, dq, dk, dv, dz, da: 各输入的梯度
+        """
+        w, q, k, v, z, a, saved_states, sa_values = ctx.saved_tensors
+        chunk_len = ctx.chunk_len
+        B, T, H, C = w.shape
+        device = w.device
+        
+        # 转换为连续存储以提高效率
+        dy = dy.contiguous()
+        
+        # 初始化梯度
+        dw = torch.zeros_like(w)
+        dq = torch.zeros_like(q)
+        dk = torch.zeros_like(k)
+        dv = torch.zeros_like(v)
+        dz = torch.zeros_like(z)
+        da = torch.zeros_like(a)
+        
+        # 预处理w: w = exp(-exp(w))
+        w_exp_factor = -torch.exp(w)
+        w = torch.exp(w_exp_factor)
+        
+        # 反向传播，从最后一个时间步开始
+        state_T = torch.zeros(B, H, C, C, device=device)
+        dstate = torch.zeros(B, H, C, C, device=device)
+        dstate_T = torch.zeros(B, H, C, C, device=device)
+        
+        for t in range(T-1, -1, -1):
+            # 获取当前时间步骤的数据
+            w_t = w[:, t]  # [B, H, C]
+            q_t = q[:, t]  # [B, H, C]
+            k_t = k[:, t]  # [B, H, C]
+            v_t = v[:, t]  # [B, H, C]
+            z_t = z[:, t]  # [B, H, C]
+            a_t = a[:, t]  # [B, H, C]
+            sa_t = sa_values[:, t]  # [B, H, C]
+            dy_t = dy[:, t]  # [B, H, C]
+            
+            # 如果当前时间步是chunk的末尾，加载保存的状态
+            if (t + 1) % chunk_len == 0:
+                chunk_idx = t // chunk_len
+                state_T = saved_states[:, :, chunk_idx].clone()
+            
+            # 计算dq
+            for b in range(B):
+                for h in range(H):
+                    dq[b, t, h] = torch.sum(state_T[b, h] * dy_t[b, h])
+            
+            # 更新state_T: state_T = (state_T - k*v - a*sa) / w
+            for b in range(B):
+                for h in range(H):
+                    w_inv = 1.0 / w_t[b, h]
+                    state_T[b, h] = (state_T[b, h] - 
+                                     k_t[b, h].unsqueeze(1) * v_t[b, h].unsqueeze(0) - 
+                                     a_t[b, h].unsqueeze(1) * sa_t[b, h].unsqueeze(0)) * w_inv.unsqueeze(1)
+            
+            # 更新dstate和dstate_T
+            for b in range(B):
+                for h in range(H):
+                    dstate[b, h] += torch.outer(dy_t[b, h], q_t[b, h])
+                    dstate_T[b, h] += torch.outer(q_t[b, h], dy_t[b, h])
+            
+            # 计算各梯度
+            for b in range(B):
+                for h in range(H):
+                    # 计算dw
+                    dw_bh = torch.sum(dstate_T[b, h] * state_T[b, h])
+                    dw[b, t, h] = dw_bh * w_t[b, h] * w_exp_factor[b, t, h]
+                    
+                    # 计算dk
+                    dk[b, t, h] = torch.sum(dstate_T[b, h] * v_t[b, h].unsqueeze(0), dim=1)
+                    
+                    # 计算dv
+                    dv[b, t, h] = torch.sum(dstate[b, h] * k_t[b, h].unsqueeze(0), dim=1)
+                    
+                    # 计算dSb (用于dz和da)
+                    dSb = torch.sum(dstate[b, h] * a_t[b, h].unsqueeze(0), dim=1)
+                    
+                    # 计算da
+                    da[b, t, h] = torch.sum(dstate_T[b, h] * sa_t[b, h].unsqueeze(0), dim=1)
+                    
+                    # 计算dz
+                    dz_bh = torch.zeros(C, device=device)
+                    for j in range(C):
+                        dz_bh[j] = torch.sum(state_T[b, h, j] * dSb)
+                    dz[b, t, h] = dz_bh
+            
+            # 更新dstate和dstate_T
+            for b in range(B):
+                for h in range(H):
+                    dSb = torch.sum(dstate[b, h] * a_t[b, h].unsqueeze(0), dim=1)
+                    dstate[b, h] = dstate[b, h] * w_t[b, h].unsqueeze(1) + torch.outer(dSb, z_t[b, h])
+                    
+                    dSb_shared = torch.sum(dstate[b, h] * a_t[b, h].unsqueeze(0), dim=1)
+                    dstate_T[b, h] = dstate_T[b, h] / w_t[b, h].unsqueeze(1) + torch.outer(z_t[b, h], dSb_shared)
+        
+        return dw, dq, dk, dv, dz, da
+
+class WindBackstepping_Torch(torch.nn.Module):
+    """
+    WIND算法的纯PyTorch实现
+    """
+    def __init__(self):
+        super().__init__()
+        
+    def forward(self, w, q, k, v, z, a):
+        """
+        参数:
+        - w: 权重矩阵 [B, T, H, C]
+        - q: 查询矩阵 [B, T, H, C]
+        - k: 键矩阵 [B, T, H, C]
+        - v: 值矩阵 [B, T, H, C]
+        - z: z矩阵 [B, T, H, C]
+        - a: a矩阵 [B, T, H, C]
+        
+        返回:
+        - y: 输出矩阵 [B, T, H, C]
+        """
+        return WindBacksteppingFunction_Torch.apply(w, q, k, v, z, a)
+
+def RUN_CUDA_RWKV7g_Torch(q, w, k, v, a, b):
+    B, T, HC = q.shape
+    q, w, k, v, a, b = [i.view(B, T, HC // 64, 64) for i in [q, w, k, v, a, b]]
+    return WindBacksteppingFunction_Torch.apply(w, q, k, v, a, b).view(B, T, HC)
 ############### Time-Mixing Module with params sharing ###############
 class RWKV_Tmix_x070_v2(nn.Module):
     def __init__(self, args, group_id, loops_per_group):
@@ -279,8 +497,9 @@ class RWKV_Tmix_x070_v2(nn.Module):
         # equivalent to:
         # k = fused_k_rwkv7(k, a, self.k_a)
 
-        x = RUN_CUDA_RWKV7g(r, w, k, v, -kk, kk * a)
-        x = x.float()
+        # x = RUN_CUDA_RWKV7g(r, w, k, v, -kk, kk * a)
+        x = RUN_CUDA_RWKV7g_Torch(r, w, k, v, -kk, kk * a)
+        # x = x.float()
         x = self.ln_x(x.view(B * T, C)).view(B, T, C)
 
         x = x + (
