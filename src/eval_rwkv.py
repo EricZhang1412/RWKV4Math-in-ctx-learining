@@ -295,13 +295,13 @@ def compute_evals(all_models, evaluation_kwargs, save_path=None, recompute=False
 
 
 def get_run_metrics(
-    run_path, step=-1, cache=True, skip_model_load=False, skip_baselines=False
+    run_path, args, step=-1, cache=True, skip_model_load=False, skip_baselines=False
 ):
     if skip_model_load:
         _, conf = get_model_from_run(run_path, only_conf=True)
         all_models = []
     else:
-        model, conf = get_model_from_run(run_path, step)
+        model, conf = get_model_from_run(run_path, args)
         model = model.cuda().eval()
         all_models = [model]
         if not skip_baselines:
