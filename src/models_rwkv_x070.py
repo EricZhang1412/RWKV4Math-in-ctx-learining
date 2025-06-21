@@ -83,6 +83,7 @@ def get_relevant_baselines(task_name):
     }
 
     models = [model_cls(**kwargs) for model_cls, kwargs in task_to_baselines[task_name]]
+    # print(models)
     return models
 
 HEAD_SIZE = 64
@@ -505,7 +506,7 @@ class RWKV_shared(pl.LightningModule):
             inds = torch.tensor(inds)
             if max(inds) >= ys.shape[1] or min(inds) < 0:
                 raise ValueError("inds contain indices where xs and ys are not defined")
-                
+
         zs = self._combine(idx, ys)
 
         # zs shape should be [Batch_size, 2 * points, dim]

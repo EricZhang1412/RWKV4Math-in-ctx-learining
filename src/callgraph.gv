@@ -1,0 +1,44 @@
+digraph G {
+concentrate=true;
+splines="ortho";
+rankdir="LR";
+subgraph legend{
+    rank = min;
+    label = "legend";
+    Legend [shape=none, margin=0, label = <
+        <table cellspacing="0" cellpadding="0" border="1"><tr><td>Code2flow Legend</td></tr><tr><td>
+        <table cellspacing="0">
+        <tr><td>Regular function</td><td width="50px" bgcolor='#cccccc'></td></tr>
+        <tr><td>Trunk function (nothing calls this)</td><td bgcolor='#966F33'></td></tr>
+        <tr><td>Leaf function (this calls nothing else)</td><td bgcolor='#6db33f'></td></tr>
+        <tr><td>Function call</td><td><font color='black'>&#8594;</font></td></tr>
+        </table></td></tr></table>
+        >];
+}node_6013df10 [label="0: (global)()" name="eval_rwkv::(global)" shape="rect" style="rounded,filled" fillcolor="#966F33" ];
+node_b118c49c [label="138: aggregate_metrics()" name="eval_rwkv::aggregate_metrics" shape="rect" style="rounded,filled" fillcolor="#6db33f" ];
+node_ac8278bb [label="197: build_evals()" name="eval_rwkv::build_evals" shape="rect" style="rounded,filled" fillcolor="#6db33f" ];
+node_f845fbea [label="272: compute_evals()" name="eval_rwkv::compute_evals" shape="rect" style="rounded,filled" fillcolor="#cccccc" ];
+node_358615da [label="330: conf_to_model_name()" name="eval_rwkv::conf_to_model_name" shape="rect" style="rounded,filled" fillcolor="#6db33f" ];
+node_af84087f [label="42: eval_batch()" name="eval_rwkv::eval_batch" shape="rect" style="rounded,filled" fillcolor="#6db33f" ];
+node_46771f1e [label="155: eval_model()" name="eval_rwkv::eval_model" shape="rect" style="rounded,filled" fillcolor="#cccccc" ];
+node_ac60b324 [label="18: get_model_from_run()" name="eval_rwkv::get_model_from_run" shape="rect" style="rounded,filled" fillcolor="#6db33f" ];
+node_62459d40 [label="297: get_run_metrics()" name="eval_rwkv::get_run_metrics" shape="rect" style="rounded,filled" fillcolor="#cccccc" ];
+node_824375dd [label="361: read_run_dir()" name="eval_rwkv::read_run_dir" shape="rect" style="rounded,filled" fillcolor="#966F33" ];
+node_6013df10 -> node_62459d40 [color="#000000" penwidth="2"];
+node_f845fbea -> node_46771f1e [color="#56B4E9" penwidth="2"];
+node_46771f1e -> node_b118c49c [color="#D55E00" penwidth="2"];
+node_46771f1e -> node_af84087f [color="#D55E00" penwidth="2"];
+node_62459d40 -> node_ac8278bb [color="#000000" penwidth="2"];
+node_62459d40 -> node_f845fbea [color="#000000" penwidth="2"];
+node_62459d40 -> node_ac60b324 [color="#000000" penwidth="2"];
+node_62459d40 -> node_ac60b324 [color="#000000" penwidth="2"];
+node_824375dd -> node_358615da [color="#0072B2" penwidth="2"];
+node_824375dd -> node_ac60b324 [color="#0072B2" penwidth="2"];
+subgraph cluster_bbba1f44 {
+    node_ac60b324 node_af84087f node_b118c49c node_46771f1e node_ac8278bb node_f845fbea node_62459d40 node_358615da node_824375dd node_6013df10;
+    label="File: eval_rwkv";
+    name="eval_rwkv";
+    style="filled";
+    graph[style=dotted];
+};
+}
