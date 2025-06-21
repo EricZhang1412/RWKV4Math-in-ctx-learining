@@ -66,7 +66,7 @@ are as follows (starting from `src`):
 ## Instructions
 ### Baseline
 In total, we have implemented several baselines focusing on different sets of problems, defined in [`src/models_rwkv_x070.py`](https://github.com/EricZhang1412/RWKV4Math-in-ctx-learining/blob/e03919041b2c58fad91c19108c78062d991b22c1/src/models_rwkv_x070.py#L38)
-- `linear_regression`: $Y=A^\top X+B$
+- `linear_regression`: $Y=s \cdot W^\top X$
   - LeastSquaresModel
   - K-NN ($k = 3$)
   - AveragingModel
