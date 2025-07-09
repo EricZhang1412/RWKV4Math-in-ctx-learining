@@ -1,0 +1,76 @@
+Data sampler information:
+  - data n_dims: 5
+  - data scale: None
+  - data bias: None
+Task sampler information:
+  - task scale: None
+  - task w_b: None
+  0%|                                                                                                                                 | 0/1 [00:01<?, ?it/s]
+Traceback (most recent call last):
+  File "/mnt/d/PersonalFiles/in-context-learning/rwkv_v7/train.py", line 197, in <module>
+    train(model, config)
+  File "/mnt/d/PersonalFiles/in-context-learning/rwkv_v7/train.py", line 100, in train
+    loss, output = train_step(
+                   ^^^^^^^^^^^
+  File "/mnt/d/PersonalFiles/in-context-learning/rwkv_v7/train.py", line 21, in train_step
+    output, _ = model(xs, ys)
+                ^^^^^^^^^^^^^
+  File "/home/ericzh/miniconda3/envs/torch260/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ericzh/miniconda3/envs/torch260/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/d/PersonalFiles/in-context-learning/rwkv_v7/model.py", line 444, in forward
+    hidden_states, attentions, past_key_values, v_first = layer(
+                                                          ^^^^^^
+  File "/home/ericzh/miniconda3/envs/torch260/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ericzh/miniconda3/envs/torch260/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/d/PersonalFiles/in-context-learning/rwkv_v7/model.py", line 189, in forward
+    hidden_states, attentions, past_key_values, v_first = self.attn(
+                                                          ^^^^^^^^^^
+  File "/home/ericzh/miniconda3/envs/torch260/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ericzh/miniconda3/envs/torch260/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ericzh/miniconda3/envs/torch260/lib/python3.12/site-packages/rwkvfla/layers/rwkv7.py", line 230, in forward
+    delta = token_shift(hidden_states, cu_seqlens)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ericzh/miniconda3/envs/torch260/lib/python3.12/site-packages/rwkvfla/modules/token_shift.py", line 257, in token_shift
+    return TokenShift.apply(x, cu_seqlens)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ericzh/miniconda3/envs/torch260/lib/python3.12/site-packages/torch/autograd/function.py", line 575, in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ericzh/miniconda3/envs/torch260/lib/python3.12/site-packages/rwkvfla/utils.py", line 160, in wrapper
+    return fn(*contiguous_args, **contiguous_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ericzh/miniconda3/envs/torch260/lib/python3.12/site-packages/rwkvfla/modules/token_shift.py", line 228, in forward
+    output, N, T = token_shift_fwd(x, cu_seqlens)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ericzh/miniconda3/envs/torch260/lib/python3.12/site-packages/rwkvfla/modules/token_shift.py", line 189, in token_shift_fwd
+    token_shift_fwd_kernel[grid](
+  File "/home/ericzh/miniconda3/envs/torch260/lib/python3.12/site-packages/triton/runtime/jit.py", line 330, in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ericzh/miniconda3/envs/torch260/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 385, in run
+    return self.fn.run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ericzh/miniconda3/envs/torch260/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 186, in run
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ericzh/miniconda3/envs/torch260/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 166, in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ericzh/miniconda3/envs/torch260/lib/python3.12/site-packages/triton/testing.py", line 156, in do_bench
+    di.synchronize()
+  File "/home/ericzh/miniconda3/envs/torch260/lib/python3.12/site-packages/torch/cuda/__init__.py", line 985, in synchronize
+    return torch._C._cuda_synchronize()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
