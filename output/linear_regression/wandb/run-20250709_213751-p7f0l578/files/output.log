@@ -1,8 +1,0 @@
-Data sampler information:
-  - data n_dims: 5
-  - data scale: None
-  - data bias: None
-Task sampler information:
-  - task scale: None
-  - task w_b: None
-loss 1.5750075578689575: 100%|████████████████████████████████████████████████████████████████████████████████████████| 10001/10001 [06:17<00:00, 26.47it/s]

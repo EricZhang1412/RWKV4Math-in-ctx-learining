@@ -8,7 +8,7 @@ from tqdm import tqdm
 import torch
 import yaml
 
-from model import build_model, get_relevant_baselines
+from model import build_model, build_loop_model, get_relevant_baselines
 from data_utils import get_data_sampler, sample_transformation, get_task_sampler
 
 def get_model_from_run(run_path, step=-1, only_conf=False):
@@ -19,8 +19,14 @@ def get_model_from_run(run_path, step=-1, only_conf=False):
         config = yaml.safe_load(f)
     if only_conf:
         return None, config
-
-    model = build_model(config['model'])
+    if config['model'].get('loop_strategy') is not None:
+        print("Using loop model configuration.")
+        model = build_loop_model(config['model'])
+    else:
+        print("Using standard model configuration.")    
+        model = build_model(config['model'])
+    # model = build_model(config['model'])
+    # model = build_loop_model(config['model'])
 
     if step == -1:
         state_path = os.path.join(run_path, "state.pt")
@@ -35,14 +41,14 @@ def get_model_from_run(run_path, step=-1, only_conf=False):
 
 def eval_batch(model, task_sampler, xs, xs_p=None):
     task = task_sampler()
-    if torch.cuda.is_available() and model.name.split("_")[0] in ["gpt2", "lstm", "RWKV7Model"]:
+    if torch.cuda.is_available() and model.name.split("_")[0] in ["gpt2", "lstm", "RWKV7Model", "RWKV7LoopModel"]:
         device = "cuda"
     else:
         device = "cpu"
-
+    print(f"Model {model.name} at {device}")
     if xs_p is None:
         ys = task.evaluate(xs)
-        if model.name.split("_")[0] in ["gpt2", "lstm", "RWKV7Model"]:
+        if model.name.split("_")[0] in ["gpt2", "lstm", "RWKV7Model", "RWKV7LoopModel"]:
             pred = model(xs.to(device), ys.to(device))
             pred = pred[0].detach()
         else:
@@ -54,7 +60,7 @@ def eval_batch(model, task_sampler, xs, xs_p=None):
         for i in range(n_points):
             xs_comb = torch.cat((xs[:, :i, :], xs_p[:, i:, :]), dim=1)
             ys = task.evaluate(xs_comb)
-            if model.name.split("_")[0] in ["gpt2", "lstm", "RWKV7Model"]:
+            if model.name.split("_")[0] in ["gpt2", "lstm", "RWKV7Model", "RWKV7LoopModel"]:
                 pred = model(xs_comb.to(device), ys.to(device), inds=[i])
                 pred = pred[0].detach()
             else:
@@ -320,14 +326,15 @@ def get_run_metrics(
 
 
 def conf_to_model_name(conf):
-    if conf.model.family == "gpt2":
+    print(conf)
+    if conf['model']['family'] == "rwkv":
         return {
-            (3, 2): "Transformer-xs",
-            (6, 4): "Transformer-small",
-            (12, 8): "Transformer",
-        }[(conf.model.n_layer, conf.model.n_head)]
+            (3): "rwkv-xs",
+            (6): "rwkv-small",
+            (12): "rwkv",
+        }[(conf['model']['num_hidden_layers'])]
     else:
-        return conf.wandb.name
+        return conf['wandb']['name']
 
 
 def baseline_names(name):
@@ -354,35 +361,33 @@ def read_run_dir(run_dir):
     all_runs = {}
     for task in os.listdir(run_dir):
         task_dir = os.path.join(run_dir, task)
-        for run_id in os.listdir(task_dir):
-            run_path = os.path.join(task_dir, run_id)
-            _, conf = get_model_from_run(run_path, only_conf=True)
-            params = {}
-            params["run_id"] = run_id
-            params["task"] = task
-            params["model"] = conf_to_model_name(conf)
-            params["kwargs"] = "_".join(
-                f"{k}={v}" for k, v in conf.training.task_kwargs.items()
-            )
-            num_tasks = (
-                conf.training.num_tasks if "num_tasks" in conf.training else None
-            )
-            params["num_tasks"] = num_tasks if num_tasks is not None else -1
-            num_examples = (
-                conf.training.num_training_examples
-                if "num_training_examples" in conf.training
-                else None
-            )
-            params["num_examples"] = num_examples if num_examples is not None else -1
-            params["n_dims"] = conf.model.n_dims
-            params["n_layer"] = conf.model.n_layer
-            params["n_head"] = conf.model.n_head
-            params["run_name"] = conf.wandb.name
 
-            for k, v in params.items():
-                if k not in all_runs:
-                    all_runs[k] = []
-                all_runs[k].append(v)
+        run_path = task_dir
+        _, conf = get_model_from_run(run_path, only_conf=True)
+        params = {}
+        params["task"] = task
+        params["model"] = conf_to_model_name(conf)
+        params["kwargs"] = "_".join(
+            f"{k}={v}" for k, v in conf['training']['task_kwargs'].items()
+        )
+        num_tasks = (
+            conf['training']['num_tasks'] if "num_tasks" in conf['training'] else None
+        )
+        params["num_tasks"] = num_tasks if num_tasks is not None else -1
+        num_examples = (
+            conf['training']['num_training_examples']
+            if "num_training_examples" in conf['training']
+            else None
+        )
+        params["num_examples"] = num_examples if num_examples is not None else -1
+        params["hidden_size"] = conf['model']['hidden_size']
+        params["num_hidden_layers"] = conf['model']['num_hidden_layers']
+        params["run_name"] = conf['wandb']['name']
+
+        for k, v in params.items():
+            if k not in all_runs:
+                all_runs[k] = []
+            all_runs[k].append(v)
 
     df = pd.DataFrame(all_runs).sort_values("run_name")
     assert len(df) == len(df.run_name.unique())

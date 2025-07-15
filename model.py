@@ -128,7 +128,6 @@ class NNModel:
 
         return torch.stack(preds, dim=1)
 
-
 # xs and ys should be on cpu for this method. Otherwise the output maybe off in case when train_xs is not full rank due to the implementation of torch.linalg.lstsq.
 class LeastSquaresModel:
     def __init__(self, driver=None):
@@ -161,7 +160,6 @@ class LeastSquaresModel:
 
         return torch.stack(preds, dim=1)
 
-
 class AveragingModel:
     def __init__(self):
         self.name = "averaging"
@@ -188,7 +186,6 @@ class AveragingModel:
             preds.append(pred[:, 0, 0])
 
         return torch.stack(preds, dim=1)
-
 
 # Lasso regression (for sparse linear regression).
 # Seems to take more time as we decrease alpha.
@@ -246,7 +243,6 @@ class LassoModel:
             preds.append(pred)
 
         return torch.stack(preds, dim=1)
-
 
 # Gradient Descent and variants.
 # Example usage: gd_model = GDModel(NeuralNetwork, {'in_size': 50, 'hidden_size':400, 'out_size' :1}, opt_alg = 'adam', batch_size = 100, lr = 5e-3, num_steps = 200)
@@ -358,7 +354,6 @@ class GDModel:
 
         return torch.stack(preds, dim=1)
 
-
 class DecisionTreeModel:
     def __init__(self, max_depth=None):
         self.max_depth = max_depth
@@ -396,7 +391,6 @@ class DecisionTreeModel:
             preds.append(pred)
 
         return torch.stack(preds, dim=1)
-
 
 class XGBoostModel:
     def __init__(self):
@@ -618,6 +612,117 @@ class RWKV7Block(nn.Module):
 
         return outputs
 
+class RWKV7BlockGroup(nn.Module):
+    def __init__(
+        self,
+        config: RWKV7LoopConfig,
+        group_idx: int
+    ) -> RWKV7BlockGroup:
+        super().__init__()
+
+        self.config = config
+        self.group_idx = group_idx
+        self.blocks = nn.ModuleList(
+            [RWKV7Block(config, layer_idx) for layer_idx in range(
+                group_idx * config.num_layers_per_group,
+                (group_idx + 1) * config.num_layers_per_group
+            )]
+        )
+        #### Add fusion for loop computation in one block-group
+        if config.loop_strategy == 'custom':
+            self.group_loop_times = config.loop_times["group_idx"]
+        if config.loop_strategy == 'uniform':
+            self.group_loop_times = config.loop_times
+
+        if self.group_loop_times > 1:
+            if config.loop_injection == 'linear_norm':
+                self.loop_injection_x = nn.Sequential(
+                    nn.Linear(
+                        2 * config.hidden_size, config.hidden_size, bias=False
+                    ),
+                    nn.LayerNorm(
+                        config.hidden_size,
+                        bias=config.norm_bias,
+                        eps=config.norm_eps
+                    ),
+                )
+                self.loop_injection_v = nn.Sequential(
+                    nn.Linear(
+                        2 * config.hidden_size, config.hidden_size, bias=False
+                    ),
+                    nn.LayerNorm(
+                        config.hidden_size,
+                        bias=config.norm_bias,
+                        eps=config.norm_eps
+                    ),
+                )
+            elif config.loop_injection == 'residual':
+                self.loop_injection_x = nn.Sequential(
+                    nn.Linear(
+                        config.hidden_size, config.hidden_size, bias=False
+                    ),
+                    nn.LayerNorm(
+                        config.hidden_size,
+                        bias=config.norm_bias,
+                        eps=config.norm_eps
+                    )
+                )
+                self.loop_injection_v = nn.Sequential(  
+                    nn.Linear(
+                        config.hidden_size, config.hidden_size, bias=False
+                    ),
+                    nn.LayerNorm(
+                        config.hidden_size,
+                        bias=config.norm_bias,
+                        eps=config.norm_eps
+                    )
+                )
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        past_key_values: Optional[Cache] = None,
+        use_cache: Optional[bool] = False,
+        output_attentions: Optional[bool] = False,
+        v_first: torch.Tensor = None,
+        cu_seqlens: Optional[torch.LongTensor] = None,
+        **kwargs,
+    ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+        attentions = None
+        for i in range(self.group_loop_times):
+            for block in self.blocks:
+                previous_hidden_states = hidden_states
+                previous_v_first = v_first
+                block_output = block(
+                    hidden_states=hidden_states,
+                    attention_mask=attention_mask,
+                    past_key_values=past_key_values,
+                    use_cache=use_cache,
+                    output_attentions=output_attentions,
+                    v_first=v_first,
+                    cu_seqlens=cu_seqlens,
+                    **kwargs
+                )
+                hidden_states, attentions, past_key_values, v_first = block_output
+            if self.config.loop_injection == 'linear_norm' and i < self.group_loop_times - 1:
+                # Inject the loop computation into the hidden states
+                #concat hidden states with the previous hidden states
+                hidden_states_cat = torch.cat((hidden_states, previous_hidden_states), dim=-1)
+                #concat v_first with the previous v_first
+                v_first_cat = torch.cat((v_first, previous_v_first), dim=-1)
+                #apply linear layer
+                hidden_states = self.loop_injection_x(hidden_states_cat)
+                v_first = self.loop_injection_v(v_first_cat)
+            elif self.config.loop_injection == 'residual' and i < self.group_loop_times - 1:
+                # Inject the loop computation into the hidden states
+                # by adding the previous hidden states to the current hidden states
+                hidden_states = self.loop_injection_x(hidden_states) + previous_hidden_states
+                v_first = self.loop_injection_v(v_first) + previous_v_first
+        
+        outputs = (hidden_states, attentions, past_key_values, v_first)
+        return outputs
+    
 
 class RWKV7PreTrainedModel(PreTrainedModel):
 
@@ -914,25 +1019,302 @@ def build_model(config_dict):
     )
     return RWKV7Model(config=config)
     
+class RWKV7LoopConfig(RWKV7Config):
+    """
+    Configuration for RWKV7LoopModel.
+    Inherits from RWKV7Config and adds specific parameters for loop computation.
+    """
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        #### Add loop strategy ####
+        self.num_block_groups = kwargs.get('num_block_groups', 1)  # Number of block groups for loop computation
+        self.num_layers_per_group = kwargs.get('num_layers_per_group', self.num_hidden_layers // self.num_block_groups)
+        if self.num_layers_per_group * self.num_block_groups != self.num_hidden_layers:
+            raise ValueError("num_layers_per_group * num_block_groups must equal num_hidden_layers")    
+        self.loop_strategy = kwargs.get('loop_strategy', 'uniform')  
+        # Strategy for looping over block groups:
+        # 'uniform': All block groups are looped through the same number of times. The config function receives a single integer for the number of loops.
+        # 'custom': Custom strategy where each block group can have a different number of loops. The config function receives a dictionary with the number of loops for each block group.
+        self.loop_times = kwargs.get('loop_times', 0)  # Number of times to loop through each block group
+        # print(f"Loop strategy: {self.loop_strategy}, Loop times: {self.loop_times}")
+        if self.loop_strategy == 'custom' and self.loop_times is None:
+            raise ValueError("loop_times must be provided when loop_strategy is 'custom'")
+        if self.loop_strategy not in ['uniform', 'custom']:
+            raise ValueError("loop_strategy must be either 'uniform' or 'custom'")
+        if self.loop_strategy == 'custom' and len(self.loop_times) != self.num_block_groups:
+            raise ValueError("loop_times must have the same length as num_block_groups when loop_strategy is 'custom'")
+        if self.loop_strategy == 'uniform' and not isinstance(self.loop_times, int):
+            raise ValueError("loop_times must be an integer when loop_strategy is 'uniform'")
+        
+        self.loop_injection = kwargs.get('loop_injection', 'linear_norm')  # Method to inject loop computation
+
+####[TODO] Unreasoned buggy code for RWKV7PreTrainedLoopModel
+# class RWKV7PreTrainedLoopModel(RWKV7PreTrainedModel):
+#     """
+#     A base class for RWKV7 models that supports loop computation.
+#     Inherits from RWKV7PreTrainedModel and adds specific parameters for loop computation.
+#     """
+#     config_class = RWKV7LoopConfig
+#     base_model_prefix = 'model'
+#     supports_gradient_checkpointing = True
+#     _no_split_modules = ['RWKV7BlockGroup']
+#     # _no_split_modules = ['RWKV7Block']
+#     _supports_cache_class = True
+#     _skip_keys_device_placement = ["past_key_values"]
+#     def __init__(self, *inputs, **kwargs):
+#         super().__init__(*inputs, **kwargs)
+        
+#     @torch.no_grad()
+#     def _init_weights(
+#         self,
+#         module: nn.Module,
+#         rescale_prenorm_residual: bool = True,
+#         num_residuals_per_layer: int = 2,
+#     ):
+#         if isinstance(module, nn.Embedding):
+#             # Initialize embedding weights
+#             scale = -1e-4
+#             nn.init.uniform_(module.weight, a=scale, b=-scale)
+#         elif isinstance(module, nn.Linear) and hasattr(self, 'lm_head') and module is self.lm_head:
+#             # Initialize the output layer weights
+#             if self.config.vocab_size > self.config.hidden_size:
+#                 scale = 0.5 * math.sqrt(self.config.vocab_size / self.config.hidden_size)
+#             else:
+#                 scale = 0.5
+#             original_dtype = module.weight.dtype
+#             module.weight.data = nn.init.orthogonal_(module.weight.data.to(torch.float32), gain=scale).to(original_dtype)
+#         elif hasattr(module, 'reset_parameters') and getattr(module, '_in_rwkv_module', False) is False:
+#             module.reset_parameters()
+        
+#         if rescale_prenorm_residual:
+#             # Reinitialize selected weights subject to the OpenAI GPT-2 Paper Scheme
+#             p = None
+#             if hasattr(module, 'o_proj'):
+#                 p = module.o_proj.weight
+#             elif hasattr(module, 'down_proj'):
+#                 p = module.down_proj.weight
+#             if p is not None:
+#                 nn.init.kaiming_uniform_(p, a=math.sqrt(5))
+#                 with torch.no_grad():
+#                     p /= math.sqrt(num_residuals_per_layer * self.config.num_hidden_layers)
+
+# class RWKV7LoopModel(RWKV7PreTrainedLoopModel):
+class RWKV7LoopModel(RWKV7PreTrainedModel):
+    """
+    A model that loops over the RWKV7 block groups for each input point.
+    """
+
+    def __init__(self, config: RWKV7LoopConfig):
+        super().__init__(config)
+        self.name = f"RWKV7LoopModel_{config.num_hidden_layers}layers_{config.hidden_size}hidden"
+        self.padding_idx = config.pad_token_id
+        self.vocab_size = config.vocab_size
+        self.embeddings = nn.Linear(
+            config.vocab_size, config.hidden_size, bias=False
+        )
+        self.block_groups = nn.ModuleList(
+            [RWKV7BlockGroup(config, group_idx) for group_idx in range(config.num_block_groups)]
+        )
+        self.norm = (LayerNorm if config.fuse_norm else nn.LayerNorm)(
+            config.hidden_size,
+            bias=config.norm_bias,
+            eps=config.norm_eps
+        )
+        self._read_out = nn.Linear(config.hidden_size, 1)
+    
+        self.gradient_checkpointing = False
+        self.post_init()
+    
+    @staticmethod
+    def _combine(xs_b, ys_b):
+        """Interleaves the x's and the y's into a single sequence."""
+        bsize, points, dim = xs_b.shape
+        ys_b_wide = torch.cat(
+            (
+                ys_b.view(bsize, points, 1),
+                torch.zeros(bsize, points, dim - 1, device=ys_b.device),
+            ),
+            axis=2,
+        )
+        zs = torch.stack((xs_b, ys_b_wide), dim=2)
+        zs = zs.view(bsize, 2 * points, dim)
+        return zs
+
+    def get_input_embeddings(self):
+        return self.embeddings
+
+    def set_input_embeddings(self, value):
+        self.embeddings = value
+
+    #[TODO] Implement the load_state_dict method for RWKV7LoopModel if needed: def load_state_dict(self, state_dict, strict=True, assign=False):
+
+    def forward(
+        self,
+        xs, ys, inds=None,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,  # noqa
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        past_key_values: Optional[Cache] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        cu_seqlens: Optional[torch.LongTensor] = None,
+        **kwargs: Unpack[Dict]
+    ) -> Union[Tuple, BaseModelOutputWithPast]:
+        if output_attentions:
+            warnings.warn("`RWKV7LoopModel` does not `output_attentions` now, setting it to `False`.")
+            output_attentions = False
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        use_cache = use_cache if use_cache is not None else (self.config.use_cache if not self.training else False)
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        if inds is None:
+            inds = torch.arange(ys.shape[1])
+        else:
+            inds = torch.tensor(inds)
+            if max(inds) >= ys.shape[1] or min(inds) < 0:
+                raise ValueError("inds contain indices where xs and ys are not defined")
+        
+        zs = self._combine(xs, ys)
+        
+        if inputs_embeds is None:
+            inputs_embeds = self.embeddings(zs)
+        
+        hidden_states = inputs_embeds
+
+        if use_cache and not isinstance(past_key_values, Cache):
+            past_key_values = Cache.from_legacy_cache(past_key_values)
+
+        all_hidden_states = () if output_hidden_states else None
+        all_attns = () if output_attentions else None
+
+        v_first = torch.zeros_like(hidden_states)
+        
+        ##### Add Loop computing over block groups #####
+        for group in self.block_groups:
+            if output_hidden_states:
+                all_hidden_states += (hidden_states,)
+
+            if self.gradient_checkpointing and self.training:
+                hidden_states, attentions, past_key_values, v_first = self._gradient_checkpointing_func(
+                    group.__call__,
+                    hidden_states,
+                    attention_mask,
+                    past_key_values,
+                    use_cache,
+                    output_attentions,
+                    v_first,
+                    cu_seqlens,
+                    **kwargs
+                )
+            else:
+                hidden_states, attentions, past_key_values, v_first = group(
+                    hidden_states,
+                    attention_mask=attention_mask,
+                    past_key_values=past_key_values,
+                    use_cache=use_cache,
+                    output_attentions=output_attentions,
+                    v_first=v_first,
+                    cu_seqlens=cu_seqlens,
+                    **kwargs
+                )
+
+            if output_attentions:
+                all_attns += (attentions,)
+        hidden_states = self.norm(hidden_states)
+
+        # add hidden states from the last decoder layer
+        if output_hidden_states:
+            all_hidden_states += (hidden_states,)
+
+        prediction = self._read_out(hidden_states)
+        pred_on_xs = prediction[:, ::2, 0][:, inds]
+
+        if not return_dict:
+            return tuple(i for i in [hidden_states, past_key_values, all_hidden_states, all_attns] if i is not None)
+        return pred_on_xs, BaseModelOutputWithPast(
+            last_hidden_state=hidden_states,
+            past_key_values=past_key_values,
+            hidden_states=all_hidden_states,
+            attentions=all_attns
+        )
+
+def build_loop_model(config_dict):
+    """
+    Build the RWKV loop model based on the provided configuration.
+    
+    Args:
+        config (RWKV7LoopConfig): Configuration for the RWKV loop model.
+        
+    Returns:
+        RWKV7LoopModel: An instance of the RWKV loop model.
+    """
+    ####### parse the configuration dictionary #######
+    config = RWKV7LoopConfig(
+        hidden_size=config_dict.get("hidden_size", 64),
+        num_hidden_layers=config_dict.get("num_hidden_layers", 3),
+        head_dim=config_dict.get("head_dim", 64),
+        decay_low_rank_dim=config_dict.get("decay_low_rank_dim", 64),
+        gate_low_rank_dim=config_dict.get("gate_low_rank_dim", 128),
+        a_low_rank_dim=config_dict.get("a_low_rank_dim", 64),
+        v_low_rank_dim=config_dict.get("v_low_rank_dim", 16),
+        max_position_embeddings=config_dict.get("max_position_embeddings", None),
+        vocab_size=config_dict.get("vocab_size", 5),
+        num_block_groups=config_dict.get("num_block_groups", 1),
+        num_layers_per_group=config_dict.get("num_layers_per_group", None),
+        loop_strategy=config_dict.get("loop_strategy", 'uniform'),
+        loop_times=config_dict.get("loop_times", None),
+        loop_injection=config_dict.get("loop_injection", 'linear_norm')
+    )
+    return RWKV7LoopModel(config=config)
 
 if __name__ == "__main__":
     # Initialize the RWKV model
-    model = RWKV7Model(
-        config=RWKV7Config(
-            hidden_size=64,
-            num_hidden_layers=3,
-            head_dim=64,
-            decay_low_rank_dim=64,
-            gate_low_rank_dim=128,
-            a_low_rank_dim=64,
-            v_low_rank_dim=16,
-            max_position_embeddings=None,
-            vocab_size=5,
-        )
-    )
-
+    # model = RWKV7Model(
+    #     config=RWKV7Config(
+    #         hidden_size=64,
+    #         num_hidden_layers=3,
+    #         head_dim=64,
+    #         decay_low_rank_dim=64,
+    #         gate_low_rank_dim=128,
+    #         a_low_rank_dim=64,
+    #         v_low_rank_dim=16,
+    #         max_position_embeddings=None,
+    #         vocab_size=5,
+    #     )
+    # )
+    model = build_loop_model({
+        "hidden_size": 64,
+        "num_hidden_layers": 3,
+        "head_dim": 64,
+        "decay_low_rank_dim": 64,
+        "gate_low_rank_dim": 128,
+        "a_low_rank_dim": 64,
+        "v_low_rank_dim": 16,
+        "max_position_embeddings": None,
+        "vocab_size": 5,
+        "num_block_groups": 1,
+        "num_layers_per_group": 3,
+        "loop_strategy": 'uniform',
+        "loop_times": 2,  # or a dictionary like {"group_idx": 2} for custom strategy
+        "loop_injection": 'linear_norm'
+    })
     print("RWKV model initialized successfully.")
     print("Model configuration:", model.config)
     print("Model:", model)
     print("Model parameters:", sum(p.numel() for p in model.parameters() if p.requires_grad), "trainable parameters")
-
+    ###test input forward
+    xs = torch.randn(64, 11, 5)  # Batch size 64, sequence length 11, hidden size 64
+    ys = torch.randn(64, 11)  # Batch size
+    # 64, sequence length 11, hidden size 64
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    xs = xs.to(device)
+    ys = ys.to(device)
+    model = model.to(device)
+    output = model(xs, ys)
+    print("Output shape:", output[0].shape)  # Should be (64,
+    # 11) for the prediction on xs
+    print("Output prediction on xs:", output[0])  # Print the prediction on xs
+    
