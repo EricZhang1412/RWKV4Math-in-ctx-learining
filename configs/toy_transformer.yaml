@@ -1,5 +1,6 @@
+model_type: transformer
 model:
-    family: rwkv
+    family: transformer
     hidden_size: 64
     num_hidden_layers: 3
     head_dim: 64

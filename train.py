@@ -212,13 +212,19 @@ if __name__ == "__main__":
     # Initialize model
     model_config = config['model']
     print("Model configuration:", model_config)
-
-    if model_config.get('loop_strategy') is not None:
-        print("Using loop model configuration.")
-        model = build_loop_model(model_config)
+    
+    if config.get('model_type') == 'rwkv':
+        if model_config.get('loop_strategy') is not None:
+            print("Using loop model configuration.")
+            model = build_loop_model(model_config)
+        else:
+            print("Using standard model configuration.")    
+            model = build_rwkv_model(model_config)
+    elif config.get('model_type') == 'transformer':
+        print("Using transformer model configuration.")
+        model = build_transformer_model(model_config)
     else:
-        print("Using standard model configuration.")    
-        model = build_model(model_config)
+        raise ValueError(f"Unknown model type: {model_config.get('model_type')}. Supported types are 'rwkv' and 'transformer'.")
 
     # model = build_model(config['model'])
     # model = build_loop_model(model_config)

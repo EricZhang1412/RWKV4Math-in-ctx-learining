@@ -1,0 +1,55 @@
+model_type: rwkv
+model:
+    family: rwkv
+    hidden_size: 64
+    num_hidden_layers: 3
+    head_dim: 64
+    decay_low_rank_dim: 64
+    gate_low_rank_dim: 128
+    a_low_rank_dim: 64
+    v_low_rank_dim: 16
+    max_position_embeddings: None
+    vocab_size: 5
+    num_block_groups: 3
+    num_layers_per_group: 1 # ensure num_block_groups * num_layers_per_group = num_hidden_layers
+    loop_strategy: uniform  # 'uniform' or 'custom'
+    loop_times: 8  # Number of times to loop through each block group, can be an integer or a list for custom strategy
+    loop_injection: linear_norm  # Method to inject loop computation, can be 'linear_norm' or 'residual'
+
+training:
+    task: linear_regression
+    data: gaussian
+    num_tasks: null
+    num_training_examples: null
+    task_kwargs: {}
+    batch_size: 256
+    learning_rate: 0.001
+    save_every_steps: 100
+    keep_every_steps: 100000
+    train_steps: 5000
+    lr_scheduler:
+        type: "cosine"          # step/exponential/cosine
+        gamma: 0.95           # 衰减系数（所有策略通用）
+        min_learning_rate: 1e-4
+        # step_size:        # 仅用于step策略（每隔多少步衰减）
+    curriculum:
+        dims:
+            start: 5
+            end: 5
+            inc: 1
+            interval: 2000
+        points:
+            start: 15
+            end: 15
+            inc: 2
+            interval: 2000
+
+out_dir: ./output_loop_8_TinyG3L1_dim5_points15/linear_regression
+
+wandb:
+    name: "linear_regression_toy"
+    project: in-context-training
+    notes:
+    log_every_steps: 10
+
+test_run: false
