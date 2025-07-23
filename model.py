@@ -1456,6 +1456,7 @@ class TransformerModel(TransformerPreTrainedModel):
 
     def forward(
         self,
+        xs, ys, inds=None,
         input_ids: Optional[torch.LongTensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
