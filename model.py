@@ -656,27 +656,27 @@ class RWKV7BlockGroup(nn.Module):
                         eps=config.norm_eps
                     ),
                 )
-            elif config.loop_injection == 'residual':
-                self.loop_injection_x = nn.Sequential(
-                    nn.Linear(
-                        config.hidden_size, config.hidden_size, bias=False
-                    ),
-                    nn.LayerNorm(
-                        config.hidden_size,
-                        bias=config.norm_bias,
-                        eps=config.norm_eps
-                    )
-                )
-                self.loop_injection_v = nn.Sequential(  
-                    nn.Linear(
-                        config.hidden_size, config.hidden_size, bias=False
-                    ),
-                    nn.LayerNorm(
-                        config.hidden_size,
-                        bias=config.norm_bias,
-                        eps=config.norm_eps
-                    )
-                )
+            # elif config.loop_injection == 'residual':
+            #     self.loop_injection_x = nn.Sequential(
+            #         nn.Linear(
+            #             config.hidden_size, config.hidden_size, bias=False
+            #         ),
+            #         nn.LayerNorm(
+            #             config.hidden_size,
+            #             bias=config.norm_bias,
+            #             eps=config.norm_eps
+            #         )
+            #     )
+            #     self.loop_injection_v = nn.Sequential(  
+            #         nn.Linear(
+            #             config.hidden_size, config.hidden_size, bias=False
+            #         ),
+            #         nn.LayerNorm(
+            #             config.hidden_size,
+            #             bias=config.norm_bias,
+            #             eps=config.norm_eps
+            #         )
+            #     )
 
     def forward(
         self,
@@ -712,13 +712,30 @@ class RWKV7BlockGroup(nn.Module):
                 #concat v_first with the previous v_first
                 v_first_cat = torch.cat((v_first, previous_v_first), dim=-1)
                 #apply linear layer
-                hidden_states = self.loop_injection_x(hidden_states_cat)
-                v_first = self.loop_injection_v(v_first_cat)
+                float_hidden_states = hidden_states_cat.float()  # 转换为fp32
+                injected_hidden_states = self.loop_injection_x(float_hidden_states)
+                hidden_states = injected_hidden_states.to(hidden_states.dtype)
+                float_v_first = v_first_cat.float()  # 转换为fp32
+                injected_v_first = self.loop_injection_v(float_v_first)
+                v_first = injected_v_first.to(v_first.dtype)
             elif self.config.loop_injection == 'residual' and i < self.group_loop_times - 1:
                 # Inject the loop computation into the hidden states
                 # by adding the previous hidden states to the current hidden states
-                hidden_states = self.loop_injection_x(hidden_states) + previous_hidden_states
-                v_first = self.loop_injection_v(v_first) + previous_v_first
+                # import pdb; pdb.set_trace()
+                hidden_states = hidden_states + previous_hidden_states
+                float_hidden = hidden_states.float()  # 转换为fp32
+                normed = torch.nn.functional.layer_norm(
+                    float_hidden,
+                    (self.config.hidden_size,)
+                )
+                hidden_states = normed.to(hidden_states.dtype)
+                v_first = v_first + previous_v_first
+                float_v_first = v_first.float()  # 转换为fp32
+                normed_v_first = torch.nn.functional.layer_norm(
+                    float_v_first,
+                    (self.config.hidden_size,)
+                )
+                v_first = normed_v_first.to(v_first.dtype)
         
         outputs = (hidden_states, attentions, past_key_values, v_first)
         return outputs
@@ -995,7 +1012,7 @@ class RWKV7Model(RWKV7PreTrainedModel):
             attentions=all_attns
         )
 
-def build_model(config_dict):
+def build_rwkv_model(config_dict):
     """
     Build the RWKV model based on the provided configuration.
     
@@ -1098,7 +1115,6 @@ class RWKV7LoopConfig(RWKV7Config):
 #                 with torch.no_grad():
 #                     p /= math.sqrt(num_residuals_per_layer * self.config.num_hidden_layers)
 
-# class RWKV7LoopModel(RWKV7PreTrainedLoopModel):
 class RWKV7LoopModel(RWKV7PreTrainedModel):
     """
     A model that loops over the RWKV7 block groups for each input point.
@@ -1270,6 +1286,74 @@ def build_loop_model(config_dict):
     )
     return RWKV7LoopModel(config=config)
 
+################### Transformers Model Initialization ###################
+from rwkvfla.models import TransformerModel
+from rwkvfla.models import TransformerConfig
+
+def build_transformer_model(config_dict):
+    """
+    Build the transformer model based on the provided configuration.
+    
+    Args:
+        config (TransformerConfig): Configuration for the transformer model.
+        
+    Returns:
+        TransformerModel: An instance of the transformer model.
+    """
+    config = TransformerConfig(
+        # hidden_size: int = 2048,
+        # num_hidden_layers: int = 24,
+        # num_heads: int = 32,
+        # num_kv_heads: int = None,
+        # qkv_bias: bool = False,
+        # qk_norm: bool = False,
+        # window_size: Optional[int] = None,
+        # rope_theta: Optional[float] = 10000.,
+        # max_position_embeddings: int = 2048,
+        # hidden_ratio: Optional[int] = 4,
+        # intermediate_size: Optional[int] = None,
+        # hidden_act: str = "swish",
+        # initializer_range: float = 0.02,
+        # elementwise_affine: Optional[bool] = True,
+        # norm_eps: float = 1e-6,
+        # use_cache: bool = True,
+        # pad_token_id: int = None,
+        # bos_token_id: int = 1,
+        # eos_token_id: int = 2,
+        # tie_word_embeddings: bool = False,
+        # fuse_norm: bool = True,
+        # fuse_swiglu: bool = True,
+        # fuse_cross_entropy: bool = True,
+        # use_l2warp: bool = False,
+        # vocab_size: int = 32000,
+        hidden_size=config_dict.get("hidden_size", 64),
+        num_hidden_layers=config_dict.get("num_hidden_layers", 3),
+        num_heads=config_dict.get("num_heads", 8),
+        num_kv_heads=config_dict.get("num_kv_heads", None),
+        qkv_bias=config_dict.get("qkv_bias", False),
+        qk_norm=config_dict.get("qk_norm", False),
+        window_size=config_dict.get("window_size", None),
+        rope_theta=config_dict.get("rope_theta", 10000.0),
+        max_position_embeddings=config_dict.get("max_position_embeddings", 2048),
+        hidden_ratio=config_dict.get("hidden_ratio", 4),
+        intermediate_size=config_dict.get("intermediate_size", None),
+        hidden_act=config_dict.get("hidden_act", "swish"),
+        initializer_range=config_dict.get("initializer_range", 0.02),
+        elementwise_affine=config_dict.get("elementwise_affine", True),
+        norm_eps=config_dict.get("norm_eps", 1e-6),
+        use_cache=config_dict.get("use_cache", True),
+        pad_token_id=config_dict.get("pad_token_id", None),
+        bos_token_id=config_dict.get("bos_token_id", 1),
+        eos_token_id=config_dict.get("eos_token_id", 2),
+        tie_word_embeddings=config_dict.get("tie_word_embeddings", False),
+        fuse_norm=config_dict.get("fuse_norm", True),
+        fuse_swiglu=config_dict.get("fuse_swiglu", True),
+        fuse_cross_entropy=config_dict.get("fuse_cross_entropy", True),
+        use_l2warp=config_dict.get("use_l2warp", False),
+        vocab_size=config_dict.get("vocab_size", 32000)
+    )
+    return TransformerModel(config=config)
+
 if __name__ == "__main__":
     # Initialize the RWKV model
     # model = RWKV7Model(
@@ -1285,36 +1369,51 @@ if __name__ == "__main__":
     #         vocab_size=5,
     #     )
     # )
-    model = build_loop_model({
+
+    # model = build_loop_model({
+    #     "hidden_size": 64,
+    #     "num_hidden_layers": 3,
+    #     "head_dim": 64,
+    #     "decay_low_rank_dim": 64,
+    #     "gate_low_rank_dim": 128,
+    #     "a_low_rank_dim": 64,
+    #     "v_low_rank_dim": 16,
+    #     "max_position_embeddings": None,
+    #     "vocab_size": 5,
+    #     "num_block_groups": 1,
+    #     "num_layers_per_group": 3,
+    #     "loop_strategy": 'uniform',
+    #     "loop_times": 2,  # or a dictionary like {"group_idx": 2} for custom strategy
+    #     "loop_injection": 'linear_norm'
+    # })
+    # print("RWKV model initialized successfully.")
+    # print("Model configuration:", model.config)
+    # print("Model:", model)
+    # print("Model parameters:", sum(p.numel() for p in model.parameters() if p.requires_grad), "trainable parameters")
+    # ###test input forward
+    # xs = torch.randn(64, 11, 5)  # Batch size 64, sequence length 11, hidden size 64
+    # ys = torch.randn(64, 11)  # Batch size
+    # # 64, sequence length 11, hidden size 64
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # xs = xs.to(device)
+    # ys = ys.to(device)
+    # model = model.to(device)
+    # output = model(xs, ys)
+    # print("Output shape:", output[0].shape)  # Should be (64,
+    # # 11) for the prediction on xs
+    # print("Output prediction on xs:", output[0])  # Print the prediction on xs
+    model = build_transformer_model({
         "hidden_size": 64,
         "num_hidden_layers": 3,
-        "head_dim": 64,
-        "decay_low_rank_dim": 64,
-        "gate_low_rank_dim": 128,
-        "a_low_rank_dim": 64,
-        "v_low_rank_dim": 16,
-        "max_position_embeddings": None,
-        "vocab_size": 5,
-        "num_block_groups": 1,
-        "num_layers_per_group": 3,
-        "loop_strategy": 'uniform',
-        "loop_times": 2,  # or a dictionary like {"group_idx": 2} for custom strategy
-        "loop_injection": 'linear_norm'
+        "num_attention_heads": 8,
+        "intermediate_size": 256,
+        "hidden_act": "swish",
+        "initializer_range": 0.02,
+        "layer_norm_eps": 1e-12,
+        "max_position_embeddings": 512,
+        "vocab_size": 32000
     })
-    print("RWKV model initialized successfully.")
+    print("Transformer model initialized successfully.")
     print("Model configuration:", model.config)
     print("Model:", model)
     print("Model parameters:", sum(p.numel() for p in model.parameters() if p.requires_grad), "trainable parameters")
-    ###test input forward
-    xs = torch.randn(64, 11, 5)  # Batch size 64, sequence length 11, hidden size 64
-    ys = torch.randn(64, 11)  # Batch size
-    # 64, sequence length 11, hidden size 64
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    xs = xs.to(device)
-    ys = ys.to(device)
-    model = model.to(device)
-    output = model(xs, ys)
-    print("Output shape:", output[0].shape)  # Should be (64,
-    # 11) for the prediction on xs
-    print("Output prediction on xs:", output[0])  # Print the prediction on xs
-    

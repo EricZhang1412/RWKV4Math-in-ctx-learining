@@ -17,7 +17,7 @@ def valid_row(r):
 sns.set_theme('notebook', 'darkgrid')
 palette = sns.color_palette('colorblind')
 
-run_dir = "./output"
+run_dir = "./output_loop_1_G3L1"
 df = read_run_dir(run_dir)
 print(df)
 
@@ -39,9 +39,12 @@ n_dims = conf['model']['vocab_size']
 
 models = relevant_model_names[task]
 
+image_dir = os.path.join(run_dir, "figures")  # 默认当前目录
+os.makedirs(image_dir, exist_ok=True)
+
 fig, ax = basic_plot(metrics["standard"], models=models)
 #### save the image
-file_name = f"{task}_performance_comparison.png"
+file_name = os.path.join(image_dir, f"{task}_performance_comparison.png")
 fig.savefig(file_name, bbox_inches='tight')
 
 
@@ -65,6 +68,6 @@ for name, metric in metrics.items():
         ax.set_xlim(-1, n_dims - 1)
     ax.set_ylim(-.1 * scale, 1.5 * scale)
 
-    file_name = f"{name}_performance_comparison.png"
+    file_name = os.path.join(image_dir, f"{name}_performance_comparison.png")
     fig.savefig(file_name, bbox_inches='tight')
 

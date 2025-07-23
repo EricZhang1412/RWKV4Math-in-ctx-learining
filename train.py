@@ -6,7 +6,7 @@ from tqdm import tqdm
 import torch
 import yaml
 
-from model import build_model, build_loop_model
+from model import build_rwkv_model, build_loop_model, build_transformer_model
 from data_utils import get_data_sampler, Curriculum, get_task_sampler
 
 import wandb
@@ -43,6 +43,10 @@ def train(model, config):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = None
     scheduler_config = config['training'].get('lr_scheduler', {})
+    min_lr = scheduler_config.get('min_learning_rate')
+    if min_lr is not None:
+        min_lr = float(min_lr)
+
     if scheduler_config:
         scheduler_type = scheduler_config['type']
         if scheduler_type == 'step':
@@ -149,7 +153,14 @@ def train(model, config):
         current_lr = optimizer.param_groups[0]['lr']
         if scheduler:
             scheduler.step()
-            current_lr = optimizer.param_groups[0]['lr'] if scheduler else current_lr
+            # current_lr = optimizer.param_groups[0]['lr'] if scheduler else current_lr
+            current_lr = optimizer.param_groups[0]['lr']
+            if min_lr is not None and current_lr < min_lr:
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = min_lr
+                current_lr = min_lr
+        else:
+            current_lr = optimizer.param_groups[0]['lr']
 
         if i % config['wandb']['log_every_steps'] == 0 and not config['test_run']:
             wandb.log(

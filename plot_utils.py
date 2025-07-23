@@ -11,7 +11,7 @@ palette = sns.color_palette("colorblind")
 
 relevant_model_names = {
     "linear_regression": [
-        "RWKV7Model_3layers_64hidden",
+        "RWKV7LoopModel_3layers_64hidden",
         "Least Squares",
         "3-Nearest Neighbors",
         "Averaging",
