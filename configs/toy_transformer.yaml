@@ -3,13 +3,13 @@ model:
     family: transformer
     hidden_size: 64
     num_hidden_layers: 3
-    head_dim: 64
-    decay_low_rank_dim: 64
-    gate_low_rank_dim: 128
-    a_low_rank_dim: 64 
-    v_low_rank_dim: 16
-    max_position_embeddings: None
-    vocab_size: 5
+    num_attention_heads: 8
+    intermediate_size: 256
+    hidden_act: "swish"
+    initializer_range: 0.02
+    layer_norm_eps: 1e-12
+    max_position_embeddings: 512
+    vocab_size: 32000
 
 training:
     task: linear_regression
@@ -38,10 +38,10 @@ training:
             inc: 2
             interval: 2000
 
-out_dir: ./output_noLoop/linear_regression
+out_dir: ./output_transformer_noLoop/linear_regression
 
 wandb:
-    name: "linear_regression_toy"
+    name: "linear_regression_toy_transformer"
     project: in-context-training
     notes:
     log_every_steps: 10

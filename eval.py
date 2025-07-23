@@ -8,7 +8,7 @@ from tqdm import tqdm
 import torch
 import yaml
 
-from model import build_model, build_loop_model, get_relevant_baselines
+from model import build_rwkv_model, build_loop_model, build_transformer_model, get_relevant_baselines
 from data_utils import get_data_sampler, sample_transformation, get_task_sampler
 
 def get_model_from_run(run_path, step=-1, only_conf=False):
@@ -19,12 +19,18 @@ def get_model_from_run(run_path, step=-1, only_conf=False):
         config = yaml.safe_load(f)
     if only_conf:
         return None, config
-    if config['model'].get('loop_strategy') is not None:
-        print("Using loop model configuration.")
-        model = build_loop_model(config['model'])
+    if config['model']['family'] == "rwkv":
+        if config['model'].get('loop_strategy') is not None:
+            print("Using loop model configuration.")
+            model = build_loop_model(config['model'])
+        else:
+            print("Using standard model configuration.")    
+            model = build_model(config['model'])
+    elif config['model']['family'] == "transformer":
+        print("Using transformer model configuration.")
+        model = build_transformer_model(config['model'])
     else:
-        print("Using standard model configuration.")    
-        model = build_model(config['model'])
+        raise ValueError(f"Unknown model family: {config['model']['family']}. Supported families are 'rwkv' and 'transformer'.")
     # model = build_model(config['model'])
     # model = build_loop_model(config['model'])
 
