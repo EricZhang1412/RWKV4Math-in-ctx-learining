@@ -17,10 +17,13 @@ from transformers.utils.deprecation import deprecate_kwarg
 
 from rwkvfla.layers.attn import Attention
 from rwkvfla.layers.rwkv7 import RWKV7Attention
+from rwkvfla.models.transformer.configuration_transformer import TransformerConfig
 from rwkvfla.models.rwkv7.configuration_rwkv7 import RWKV7Config
 from rwkvfla.models.utils import Cache
 from rwkvfla.modules import FusedCrossEntropyLoss, FusedLinearCrossEntropyLoss, LayerNorm
 from rwkvfla.modules.activations import ACT2FN
+from rwkvfla.modules import GatedMLP as TransformerMLP
+from rwkvfla.modules import RMSNorm
 from rwkvfla.modules.l2warp import l2_warp
 from rwkvfla.modules.token_shift import token_shift
 
@@ -1411,9 +1414,23 @@ if __name__ == "__main__":
         "initializer_range": 0.02,
         "layer_norm_eps": 1e-12,
         "max_position_embeddings": 512,
-        "vocab_size": 32000
+        "vocab_size": 5
     })
     print("Transformer model initialized successfully.")
     print("Model configuration:", model.config)
     print("Model:", model)
     print("Model parameters:", sum(p.numel() for p in model.parameters() if p.requires_grad), "trainable parameters")
+    ###test input forward
+    xs = torch.randn(64, 11, 5)  # Batch size 64, sequence length 11, hidden size 5
+    ys = torch.randn(64, 11)  # Batch size 64, sequence
+    # length 11, hidden size 5
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    xs = xs.to(device)
+    ys = ys.to(device)
+    model = model.to(device)
+    output = model(xs, ys)
+    print("Output shape:", output[0].shape)  # Should be (64,
+    # 11) for the prediction on xs
+    print("Output prediction on xs:", output[0])  # Print the prediction on xs
+    # print("Output:", output)  # Print the full output structure
+
